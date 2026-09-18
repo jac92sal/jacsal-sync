@@ -308,6 +308,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       return ok({ file, entities: rows.map((e) => ({ ...e, geometry: JSON.parse(e.geometry as string), attributes: JSON.parse(e.attributes as string) })) })
     }
     if (seg[2] === 'models' && method === 'GET') return ok({ file, models: JSON.parse((file.models as string | null) ?? '[]'), insunits: file.insunits ?? null })
+    if (seg[2] === 'viewer' && seg[3] === 'inspect' && method === 'GET') {
+      const job = await one<{ output_key: string }>(db, `SELECT output_key FROM cad_jobs WHERE file_id = ? AND output_key IS NOT NULL ORDER BY created_at DESC LIMIT 1`, file.id)
+      if (!job) throw notFound()
+      const meta = JSON.parse(job.output_key) as { bucketKey: string; keys: { input: string } }
+      return ok(await cad(env).inspectObject(meta.bucketKey, meta.keys.input))
+    }
     // Autodesk Viewer: translate the DWG that was uploaded to OSS for conversion (or the latest written-back result).
     if (seg[2] === 'viewer' && method === 'POST') {
       const force = url.searchParams.get('force') === '1'

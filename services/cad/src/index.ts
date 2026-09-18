@@ -173,6 +173,14 @@ export class CadService extends WorkerEntrypoint<Env> {
       return { status: m?.status ?? 'pending', progress: m?.progress ?? '0% complete', messages: m?.messages ?? [] }
     })
   }
+  /** Diagnostics: bucket + object records as OSS sees them (Model Derivative reads through OSS, not S3). */
+  async inspectObject(bucketKey: string, objectKey: string): Promise<{ bucket: unknown; object: unknown }> {
+    return this.withAps(async () => {
+      const token = await aps.apsToken(await this.creds())
+      const get = async (u: string) => { try { return await aps.rawGet(token, u) } catch (e) { return { error: String((e as Error).message) } } }
+      return { bucket: await get(`${aps.OSS_URL}/buckets/${bucketKey}/details`), object: await get(`${aps.OSS_URL}/buckets/${bucketKey}/objects/${encodeURIComponent(objectKey)}/details`) }
+    })
+  }
   /** Browser token for the Viewer (viewables:read only). */
   async viewerToken(): Promise<{ access_token: string; expires_in: number }> {
     return this.withAps(async () => aps.viewerToken(await this.creds()))

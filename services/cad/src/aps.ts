@@ -209,7 +209,8 @@ export function writebackScript(ops: WriteOp[]): string {
 // ---- Model Derivative + Viewer (mirrors autodesk-platform-services/aps-simple-viewer-nodejs services/aps.js)
 
 /** Base64url of the OSS object id, as the Viewer and Model Derivative expect. */
-export const urnify = (bucketKey: string, objectKey: string): string => btoa(`urn:adsk.objects:os.object:${bucketKey}/${objectKey}`).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+/** OSS reports object ids with the key percent-encoded (a `/` in the key becomes `%2F`); the urn must match that exactly. */
+export const urnify = (bucketKey: string, objectKey: string): string => btoa(`urn:adsk.objects:os.object:${bucketKey}/${encodeURIComponent(objectKey)}`).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 
 /** Start (or force-restart) a translation to SVF2 with 2D and 3D views. */
 export async function translateObject(token: string, urn: string, force = false): Promise<{ result: string; urn: string }> {
@@ -235,3 +236,6 @@ export async function viewerToken(c: ApsCreds): Promise<{ access_token: string; 
   if (!j.access_token) throw new Error(`aps viewer token: ${j.error_description ?? r.status}`)
   return { access_token: j.access_token, expires_in: j.expires_in ?? 3600 }
 }
+
+export const OSS_URL = OSS
+export async function rawGet(token: string, url: string): Promise<unknown> { return api<unknown>(token, url) }
