@@ -19,6 +19,6 @@
     // The API key credential only accepts requests whose Referer matches its allow-list. Workers send none by
     // default, so every ArcGIS location-service call sets this header. Add sync.jacsalservices.com to the key's
     // referrers in ArcGIS Location Platform and change this to https://sync.jacsalservices.com/ when convenient.
-    "ARCGIS_REFERER": "https://adufeasibility.jacsalservices.com/"
+    "ARCGIS_REFERER": "https://sync.jacsalservices.com/"
   }
 }
