@@ -157,6 +157,27 @@ export class CadService extends WorkerEntrypoint<Env> {
     })
   }
 
+  /** Viewer: make sure the OSS object is translated for the Autodesk Viewer; returns the urn and current status. */
+  async ensureViewable(bucketKey: string, objectKey: string, force = false): Promise<{ urn: string; status: string; progress: string; messages: string[] }> {
+    return this.withAps(async () => {
+      const token = await aps.apsToken(await this.creds())
+      const urn = aps.urnify(bucketKey, objectKey)
+      let m = force ? null : await aps.getManifest(token, urn)
+      if (!m || m.status === 'failed' || m.status === 'timeout') { await aps.translateObject(token, urn, force || !!m); m = await aps.getManifest(token, urn) }
+      return { urn, status: m?.status ?? 'pending', progress: m?.progress ?? '0% complete', messages: m?.messages ?? [] }
+    })
+  }
+  async viewableStatus(urn: string): Promise<{ status: string; progress: string; messages: string[] }> {
+    return this.withAps(async () => {
+      const m = await aps.getManifest(await aps.apsToken(await this.creds()), urn)
+      return { status: m?.status ?? 'pending', progress: m?.progress ?? '0% complete', messages: m?.messages ?? [] }
+    })
+  }
+  /** Browser token for the Viewer (viewables:read only). */
+  async viewerToken(): Promise<{ access_token: string; expires_in: number }> {
+    return this.withAps(async () => aps.viewerToken(await this.creds()))
+  }
+
   /** Fetch a Design Automation report (plain text log) for diagnostics. */
   async report(reportUrl: string): Promise<string> {
     return (await fetch(reportUrl)).text()

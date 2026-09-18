@@ -3,7 +3,9 @@ import { Link, useOutletContext } from 'react-router-dom'
 import type { ShellCtx } from './ProjectShell'
 import { api, ftIn, unitsToFeet, type CadEntity, type CadFile, type Candidate, type ModelRegion, type Obj } from '../lib/api'
 import { Card, Pill } from '../components/ui'
-import { PlanViewer, focusBox } from '../components/PlanViewer'
+import { focusBox } from '../components/PlanViewer'
+import { ApsViewer, type ViewerHandle } from '../components/ApsViewer'
+import { useRef } from 'react'
 
 const KINDS: Record<string, string[]> = { WALL: ['WALL', 'BEAM', 'SHEAR_WALL'], BEAM: ['BEAM', 'WALL'], WINDOW: ['WINDOW', 'DOOR'], DOOR: ['DOOR', 'WINDOW'], ROOM: ['ROOM'] }
 const KIND_LABEL: Record<string, string> = { WALL: 'Wall', BEAM: 'Beam / header', SHEAR_WALL: 'Shear wall', WINDOW: 'Window', DOOR: 'Door', ROOM: 'Room' }
@@ -30,6 +32,9 @@ export default function ModelReview() {
   const [plans, setPlans] = useState<Obj[]>([])
   const [planName, setPlanName] = useState<Record<string, string>>({})
   const [opened, setOpened] = useState(false)
+  const [viewer, setViewer] = useState<{ urn: string; status: string; progress: string; messages: string[] } | null>(null)
+  const [viewerErr, setViewerErr] = useState('')
+  const vh = useRef<ViewerHandle | null>(null)
 
   const k = unitsToFeet(insunits)
   const file = files.find((f) => f.id === fileId)
@@ -58,6 +63,36 @@ export default function ModelReview() {
     const e = await api.get<{ entities: CadEntity[] }>(`/files/${fileId}/entities${q}`)
     setEntities(e.entities); await loadCands()
   })() }, [fileId, modelIx, models.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Autodesk Viewer: ask the server to translate the DWG (once), then poll until the manifest says success.
+  useEffect(() => {
+    if (!fileId) return
+    let stop = false
+    const tick = async () => {
+      try {
+        const v = await api.post<{ urn: string; status: string; progress: string; messages: string[] }>(`/files/${fileId}/viewer`)
+        if (stop) return
+        setViewer(v); setViewerErr('')
+        if (v.status !== 'success' && v.status !== 'failed' && v.status !== 'timeout') setTimeout(() => { if (!stop) void tick() }, 5000)
+      } catch (e) { if (!stop) setViewerErr((e as Error).message) }
+    }
+    void tick()
+    return () => { stop = true }
+  }, [fileId])
+  const getToken = () => api.get<{ access_token: string; expires_in: number }>('/viewer/token')
+  // Viewer → walk-through: selecting an entity in the drawing picks the candidate that references its handle.
+  const onSelectHandles = (handles: string[]) => {
+    const set = new Set(handles)
+    const hit = cands.find((c) => c.source_handles.some((h) => set.has(h.toUpperCase())))
+    if (hit) pick(hit)
+  }
+  // Walk-through → viewer: frame the active element, or the whole floor plan when nothing is active.
+  useEffect(() => {
+    if (!vh.current) return
+    if (active) vh.current.focusHandles(active.source_handles)
+    else if (entities.length) vh.current.fitHandles(entities.slice(0, 3000).map((e) => e.handle))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, modelIx, entities.length, viewer?.status])
 
   // Candidates that sit on the current model page (values are in feet; model bbox is in drawing units).
   const onPage = useMemo(() => {
@@ -115,10 +150,16 @@ export default function ModelReview() {
         <Link className="text-accent underline" to="list">table view</Link></div>}>
         {models.length > 0 && <div className="flex gap-1 px-3 pt-3 flex-wrap items-center"><button className="btn btn-ghost py-1 px-3" onClick={() => setOpened(false)}>← All plans</button>{usable.map((m) => <button key={m.ix} className={`btn py-1 px-3 ${m.ix === modelIx ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setModelIx(m.ix); setActiveId(null) }}>{planOf(m)?.humanName ?? m.title}</button>)}</div>}
         {models.length === 0 && file && <div className="px-4 pt-3 text-xs text-muted">No separate model pages were recognised in {file.filename}; showing the whole drawing.</div>}
-        <div className="p-3" style={{ height: 560 }}>
-          <PlanViewer entities={entities} k={k} candidates={onPage} activeId={activeId} onPick={pick} bbox={model?.bbox ?? null} focus={active ? focusBox(active, 10) : null} />
+        <div className="p-3" style={{ height: 620 }}>
+          {viewer?.status === 'success'
+            ? <ApsViewer urn={viewer.urn} getToken={getToken} onSelectHandles={onSelectHandles} onReady={(h) => { vh.current = h; if (entities.length) h.fitHandles(entities.slice(0, 3000).map((e) => e.handle)) }} />
+            : <div className="h-full grid place-items-center text-sm text-muted text-center px-6">
+                {viewerErr ? <span className="text-bad">{viewerErr}</span>
+                  : viewer?.status === 'failed' || viewer?.status === 'timeout' ? <span className="text-bad">Autodesk could not translate this drawing ({viewer.status}). {viewer.messages.join(' ')} <button className="underline text-accent" onClick={() => api.post(`/files/${fileId}/viewer?force=1`).then(() => window.location.reload())}>Retry</button></span>
+                  : <span>Preparing the AutoCAD view with Autodesk Model Derivative… {viewer?.progress ?? ''}<br /><span className="text-xs">First time takes one to three minutes for a drawing this size; after that it opens instantly.</span></span>}
+              </div>}
         </div>
-        <div className="px-4 pb-3 text-xs text-muted">Grey is the drawing. Orange walls, green outlines, and dots are what the system found. Click any of them, or use Next to walk through. Fit resets the view.</div>
+        <div className="px-4 pb-3 text-xs text-muted">This is AutoCAD's own rendering of the DWG (Autodesk Viewer). Click an entity to review it, or use Next to walk through; the view frames each element as you go. Layers, measure, and the sheet browser are in the viewer toolbar.</div>
       </Card>
 
       <Card title={`Walk-through · ${done} of ${onPage.length} reviewed`} right={<label className="text-xs flex items-center gap-1"><input type="checkbox" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} /> pending only</label>}>

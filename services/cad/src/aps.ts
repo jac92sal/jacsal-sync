@@ -3,6 +3,7 @@
 const AUTH = 'https://developer.api.autodesk.com/authentication/v2/token'
 const OSS = 'https://developer.api.autodesk.com/oss/v2'
 const DA = 'https://developer.api.autodesk.com/da/us-east/v3'
+const MD = 'https://developer.api.autodesk.com/modelderivative/v2'
 const SCOPES = 'code:all data:read data:write data:create bucket:create bucket:read'
 
 export interface ApsCreds { clientId: string; clientSecret: string }
@@ -203,4 +204,34 @@ export function writebackScript(ops: WriteOp[]): string {
   lines.push('_.SAVEAS', '2018', 'result.dwg')
   lines.push('_.DXFOUT', 'result.dxf', 'V', '2018', '16', '')
   return lines.join('\r\n')
+}
+
+// ---- Model Derivative + Viewer (mirrors autodesk-platform-services/aps-simple-viewer-nodejs services/aps.js)
+
+/** Base64url of the OSS object id, as the Viewer and Model Derivative expect. */
+export const urnify = (bucketKey: string, objectKey: string): string => btoa(`urn:adsk.objects:os.object:${bucketKey}/${objectKey}`).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+
+/** Start (or force-restart) a translation to SVF2 with 2D and 3D views. */
+export async function translateObject(token: string, urn: string, force = false): Promise<{ result: string; urn: string }> {
+  return api(token, `${MD}/designdata/job`, { method: 'POST', headers: force ? { 'x-ads-force': 'true' } : {}, body: JSON.stringify({ input: { urn }, output: { formats: [{ type: 'svf2', views: ['2d', '3d'] }] } }) })
+}
+
+export type ManifestSummary = { status: 'pending' | 'inprogress' | 'success' | 'failed' | 'timeout'; progress: string; messages: string[] }
+/** Translation status; null when the object has never been translated (404). */
+export async function getManifest(token: string, urn: string): Promise<ManifestSummary | null> {
+  const r = await apsFetch(`${MD}/designdata/${urn}/manifest`, { headers: { Authorization: `Bearer ${token}` } })
+  if (r.status === 404) return null
+  const text = await r.text()
+  if (!r.ok) throw new Error(`aps GET manifest → ${r.status}: ${text.slice(0, 300)}`)
+  const j = JSON.parse(text) as { status: ManifestSummary['status']; progress: string; derivatives?: { messages?: { message?: string | string[] }[]; children?: { messages?: { message?: string | string[] }[] }[] }[] }
+  const messages = (j.derivatives ?? []).flatMap((d) => [...(d.messages ?? []), ...(d.children ?? []).flatMap((c) => c.messages ?? [])]).flatMap((m) => (Array.isArray(m.message) ? m.message : m.message ? [m.message] : []))
+  return { status: j.status, progress: j.progress, messages }
+}
+
+/** Short-lived token the browser Viewer uses; viewables:read only, so it cannot touch buckets or jobs. */
+export async function viewerToken(c: ApsCreds): Promise<{ access_token: string; expires_in: number }> {
+  const r = await apsFetch(AUTH, { method: 'POST', headers: { Authorization: 'Basic ' + btoa(`${c.clientId}:${c.clientSecret}`), 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'viewables:read' }) })
+  const j = (await r.json()) as { access_token?: string; expires_in?: number; error_description?: string }
+  if (!j.access_token) throw new Error(`aps viewer token: ${j.error_description ?? r.status}`)
+  return { access_token: j.access_token, expires_in: j.expires_in ?? 3600 }
 }

@@ -120,6 +120,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     return ok({ result, fields: geocodeToProjectFields(result) })
   }
 
+  // ---- Autodesk Viewer token for the browser (viewables:read only)
+  if (seg[0] === 'viewer' && seg[1] === 'token' && method === 'GET') return ok(await cad(env).viewerToken())
+
   // ---- settings → ArcGIS API key (created from the user's ArcGIS sign-in; password is used in-request only)
   if (seg[0] === 'settings' && seg[1] === 'arcgis') {
     if (!seg[2] && method === 'GET') return ok({ status: await gis(env).keyStatus(), privileges: ARCGIS_PRIVILEGES })
@@ -305,6 +308,17 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       return ok({ file, entities: rows.map((e) => ({ ...e, geometry: JSON.parse(e.geometry as string), attributes: JSON.parse(e.attributes as string) })) })
     }
     if (seg[2] === 'models' && method === 'GET') return ok({ file, models: JSON.parse((file.models as string | null) ?? '[]'), insunits: file.insunits ?? null })
+    // Autodesk Viewer: translate the DWG that was uploaded to OSS for conversion (or the latest written-back result).
+    if (seg[2] === 'viewer' && method === 'POST') {
+      const force = url.searchParams.get('force') === '1'
+      const job = await one<{ kind: string; status: string; output_key: string }>(db, `SELECT kind, status, output_key FROM cad_jobs WHERE file_id = ? AND output_key IS NOT NULL AND workitem_id IS NOT NULL ORDER BY created_at DESC LIMIT 1`, file.id)
+      if (!job) throw badRequest('This drawing has not been sent to Autodesk yet (DXF uploads are parsed locally).')
+      const meta = JSON.parse(job.output_key) as { bucketKey: string; keys: { input: string; result: string } }
+      const objectKey = job.kind === 'WRITEBACK' && job.status === 'SUCCESS' ? meta.keys.result : meta.keys.input
+      const v = file.viewer_urn && !force ? { urn: file.viewer_urn as string, ...(await cad(env).viewableStatus(file.viewer_urn as string)) } : await cad(env).ensureViewable(meta.bucketKey, objectKey, force)
+      if (v.urn !== file.viewer_urn || v.status !== file.viewer_status) await updateStmt(db, 'cad_files', file.id, { viewer_urn: v.urn, viewer_status: v.status }).run()
+      return ok(v)
+    }
     if (seg[2] === 'jobs' && method === 'GET') return ok({ jobs: await all(db, 'SELECT * FROM cad_jobs WHERE file_id = ? ORDER BY created_at DESC', file.id) })
     // Re-run detection on the stored DXF (after detector improvements) without re-uploading or re-converting.
     if (seg[2] === 'rescan' && method === 'POST') {

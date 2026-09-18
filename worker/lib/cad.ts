@@ -8,7 +8,7 @@ const unitsToFeet = (insunits: number): number => ({ 1: 1 / 12, 2: 1, 3: 1 / 633
 
 type Cad = Pick<CadService, 'analyzeR2' | 'submitJob' | 'jobStatus' | 'fetchOutputsToR2' | 'patchDxf' | 'report' | 'previewScript'>
 
-export interface FileRow extends Record<string, unknown> { id: string; project_id: string; filename: string; kind: string; r2_key: string; dxf_r2_key: string | null; status: string; revision: number; entity_count: number | null; error: string | null }
+export interface FileRow extends Record<string, unknown> { id: string; project_id: string; filename: string; kind: string; r2_key: string; dxf_r2_key: string | null; status: string; revision: number; entity_count: number | null; error: string | null; viewer_urn?: string | null; viewer_status?: string | null }
 
 export async function uploadFile(db: D1Database, bucket: R2Bucket, cad: Cad, projectId: string, filename: string, bytes: ArrayBuffer, actor: string, callbackBase: string) {
   const ext = filename.toLowerCase().split('.').pop()
