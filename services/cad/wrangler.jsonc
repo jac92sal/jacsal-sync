@@ -9,14 +9,19 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "upload_source_maps": true,
+  // Headless browser parked on the Autodesk origin: Worker subrequests to developer.api.autodesk.com get HTTP 525.
+  "browser": { "binding": "BROWSER" },
   "secrets_store_secrets": [
     { "binding": "APS_CLIENT_ID",     "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APS_CLIENT_ID" },
-    { "binding": "APS_CLIENT_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APS_CLIENT_SECRET" }
+    { "binding": "APS_CLIENT_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APS_CLIENT_SECRET" },
+    { "binding": "APS_RELAY_KEY",     "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APS_RELAY_KEY" }
   ],
   "vars": {
     "APS_ENGINE": "Autodesk.AutoCAD+25_1",
     "APS_ACTIVITY": "RunScript",
     "APS_ALIAS": "prod",
-    "APS_REGION": "US"
+    "APS_REGION": "US",
+    // Relay outside Cloudflare for developer.api.autodesk.com (see relay/README.md). Empty = direct.
+    "APS_RELAY_URL": ""
   }
 }

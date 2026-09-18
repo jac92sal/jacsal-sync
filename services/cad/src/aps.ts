@@ -10,9 +10,41 @@ export type WorkItemStatus = 'pending' | 'inprogress' | 'success' | 'failedInstr
 
 let cached: { token: string; exp: number } | null = null
 
+/** Optional relay for the Autodesk API host (Workers → developer.api.autodesk.com fails with 525). Set once per isolate. */
+let relay: { url: string; key: string } | null = null
+export function configureRelay(r: { url: string; key: string } | null): void { relay = r }
+import { AsyncLocalStorage } from 'node:async_hooks'
+/** A headless-browser page parked on the Autodesk API origin. Calls made with page.evaluate(fetch) are
+ *  same-origin browser requests, which reach Autodesk normally (Worker subrequests get HTTP 525). */
+export interface ApsPage { evaluate<T, A>(fn: (arg: A) => Promise<T>, arg: A): Promise<T> }
+export const apsSession = new AsyncLocalStorage<ApsPage>()
+const APS_HOST = 'https://developer.api.autodesk.com/'
+
+/** fetch() for Autodesk API calls: relay if configured, else the browser session if one is active, else direct. */
+export async function apsFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  if (!url.startsWith(APS_HOST)) return fetch(url, init)
+  if (relay) {
+    const headers = new Headers(init.headers ?? {})
+    headers.set('x-relay-key', relay.key)
+    return fetch(`${relay.url.replace(/\/$/, '')}/api/aps?u=${encodeURIComponent(url)}`, { ...init, headers })
+  }
+  const page = apsSession.getStore()
+  if (!page) return fetch(url, init)
+  const headers: Record<string, string> = {}
+  new Headers(init.headers ?? {}).forEach((v, k) => { headers[k] = v })
+  const body = typeof init.body === 'string' ? init.body : init.body instanceof URLSearchParams ? init.body.toString() : init.body ? new TextDecoder().decode(init.body as ArrayBuffer) : undefined
+  const r = await page.evaluate(async ({ url, method, headers, body }: { url: string; method: string; headers: Record<string, string>; body?: string }) => {
+    const res = await fetch(url, { method, headers, body })
+    const h: Record<string, string> = {}
+    res.headers.forEach((v, k) => { h[k] = v })
+    return { status: res.status, headers: h, text: await res.text() }
+  }, { url, method: init.method ?? 'GET', headers, body })
+  return new Response(r.text, { status: r.status, headers: r.headers })
+}
+
 export async function apsToken(c: ApsCreds): Promise<string> {
   if (cached && cached.exp > Date.now() + 60_000) return cached.token
-  const r = await fetch(AUTH, { method: 'POST', headers: { Authorization: 'Basic ' + btoa(`${c.clientId}:${c.clientSecret}`), 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', scope: SCOPES }) })
+  const r = await apsFetch(AUTH, { method: 'POST', headers: { Authorization: 'Basic ' + btoa(`${c.clientId}:${c.clientSecret}`), 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', scope: SCOPES }) })
   const j = (await r.json()) as { access_token?: string; expires_in?: number; error?: string; error_description?: string }
   if (!j.access_token) throw new Error(`aps auth: ${j.error_description ?? j.error ?? r.status}`)
   cached = { token: j.access_token, exp: Date.now() + (j.expires_in ?? 3600) * 1000 }
@@ -20,7 +52,7 @@ export async function apsToken(c: ApsCreds): Promise<string> {
 }
 
 async function api<T>(token: string, url: string, init: RequestInit = {}): Promise<T> {
-  const r = await fetch(url, { ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers ?? {}) } })
+  const r = await apsFetch(url, { ...init, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers ?? {}) } })
   const text = await r.text()
   if (!r.ok) throw new Error(`aps ${init.method ?? 'GET'} ${url.replace(DA, 'da').replace(OSS, 'oss')} → ${r.status}: ${text.slice(0, 400)}`)
   return (text ? JSON.parse(text) : {}) as T
@@ -30,7 +62,7 @@ async function api<T>(token: string, url: string, init: RequestInit = {}): Promi
 export const bucketKeyFor = (clientId: string) => `jacsal-aps-${clientId.toLowerCase()}`.slice(0, 128)
 
 export async function ensureBucket(token: string, bucketKey: string, region = 'US'): Promise<void> {
-  const r = await fetch(`${OSS}/buckets/${bucketKey}/details`, { headers: { Authorization: `Bearer ${token}` } })
+  const r = await apsFetch(`${OSS}/buckets/${bucketKey}/details`, { headers: { Authorization: `Bearer ${token}` } })
   if (r.ok) return
   await api(token, `${OSS}/buckets`, { method: 'POST', headers: { 'x-ads-region': region }, body: JSON.stringify({ bucketKey, policyKey: 'transient' }) })
 }
@@ -58,6 +90,10 @@ export async function completeUpload(token: string, bucketKey: string, objectKey
   await api(token, `${OSS}/buckets/${bucketKey}/objects/${encodeURIComponent(objectKey)}/signeds3upload`, { method: 'POST', body: JSON.stringify({ uploadKey }) })
 }
 
+export async function listEngines(token: string): Promise<string[]> {
+  return (await api<{ data: string[] }>(token, `${DA}/engines`)).data
+}
+
 export async function nickname(token: string): Promise<string> {
   return api<string>(token, `${DA}/forgeapps/me`)
 }
@@ -69,7 +105,7 @@ export async function nickname(token: string): Promise<string> {
  */
 export async function ensureActivity(token: string, nick: string, activity: string, alias: string, engine: string): Promise<string> {
   const id = `${nick}.${activity}+${alias}`
-  const existing = await fetch(`${DA}/activities/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } })
+  const existing = await apsFetch(`${DA}/activities/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${token}` } })
   if (existing.ok) return id
   const body = {
     id: activity,
@@ -83,14 +119,14 @@ export async function ensureActivity(token: string, nick: string, activity: stri
       dxf: { verb: 'put', description: 'DXF export', required: false, localName: 'result.dxf' },
     },
   }
-  const created = await fetch(`${DA}/activities`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const created = await apsFetch(`${DA}/activities`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   if (!created.ok && created.status !== 409) throw new Error(`aps create activity ${created.status}: ${(await created.text()).slice(0, 300)}`)
   if (created.status === 409) {
     // Activity exists without this alias: add a new version and re-alias.
     await api(token, `${DA}/activities/${activity}/versions`, { method: 'POST', body: JSON.stringify(body) })
   }
   const ver = await api<{ version: number }>(token, `${DA}/activities/${activity}/versions/1`).catch(() => ({ version: 1 }))
-  const al = await fetch(`${DA}/activities/${activity}/aliases`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: alias, version: ver.version }) })
+  const al = await apsFetch(`${DA}/activities/${activity}/aliases`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: alias, version: ver.version }) })
   if (!al.ok && al.status !== 409) throw new Error(`aps alias ${al.status}: ${(await al.text()).slice(0, 300)}`)
   return id
 }

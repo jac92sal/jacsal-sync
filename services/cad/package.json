@@ -8,5 +8,8 @@
     "test": "vitest run",
     "cf-typegen": "wrangler types",
     "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^1.4.0"
   }
 }

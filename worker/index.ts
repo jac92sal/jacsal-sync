@@ -61,6 +61,21 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   const actor = user.email
   const db = env.DB
 
+  // ---- temporary diagnostics for outbound connectivity (remove after Design Automation is verified)
+  if (seg[0] === 'debug' && seg[1] === 'aps') {
+    const probe = async (label: string, u: string, init?: RequestInit) => { try { const r = await fetch(u, init); const t = await r.text(); return { label, status: r.status, cfRay: r.headers.get('cf-ray'), server: r.headers.get('server'), body: t.slice(0, 200) } } catch (e) { return { label, error: String(e) } } }
+    const results = await Promise.all([
+      probe('token-post', 'https://developer.api.autodesk.com/authentication/v2/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials' }),
+      probe('engines-get', 'https://developer.api.autodesk.com/da/us-east/v3/engines'),
+      probe('oss-get', 'https://developer.api.autodesk.com/oss/v2/buckets'),
+      probe('aps-root', 'https://developer.api.autodesk.com/'),
+      probe('autodesk-www', 'https://www.autodesk.com/'),
+      probe('arcgis', 'https://www.arcgis.com/sharing/rest/info?f=json'),
+    ])
+    const viaCad = await cad(env).diagnose()
+    return ok({ results, viaCad })
+  }
+
   // ---- calc catalogue (no project needed)
   if (seg[0] === 'calc' && seg[1] === 'modules') return ok({ modules: await calc(env).list() })
   if (seg[0] === 'calc' && seg[1] === 'benchmarks') return ok({ benchmarks: await calc(env).benchmarks() })
