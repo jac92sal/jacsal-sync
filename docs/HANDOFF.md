@@ -34,5 +34,15 @@
   open the *aduprojectjacsal* item → Privileges → enable Elevation and Basemaps (static maps), or create an API-key credential.
 - **Cloudflare returned a 403 "Attention Required" page for the SPA document to the build sandbox's IP** (assets and /api/* were fine).
   That is a zone WAF/bot rule, not the Worker. If your browser sees it too, check Security → WAF / Bot Fight Mode for jacsalservices.com.
-- Design Automation write-back has been exercised for plumbing only; verify on a real DWG in the morning (the report URL is stored on the job for diagnostics).
+- **Autodesk reachability.** Cloudflare Workers cannot call `developer.api.autodesk.com` directly (Autodesk's own Cloudflare edge
+  answers HTTP 525 to Worker subrequests). The CAD service therefore opens a Browser Rendering session parked on the Autodesk
+  origin and makes the API calls from inside it (`BROWSER` binding). Verified live: token, nickname, engines, bucket upload,
+  activity `RunScript+prod` creation, work item submission, report retrieval. A test file renamed `.dwg` reached AutoCAD Core
+  Console and failed with ErrorStatus 434 (invalid DWG) as expected. **Upload a real DWG in the morning** to confirm DXFOUT and
+  write-back end to end; each job stores its Autodesk report URL and the last log lines in `error`.
+- `GET /api/debug/aps` (signed in) shows outbound connectivity and the Autodesk diagnostic; remove it once write-back is proven.
+- A Vercel relay (`relay/`) was drafted as an alternative path and deployed as project `jacsal-sync-aps-relay`, but Vercel's
+  firewall denies every request to it (`x-vercel-mitigated: deny`) and its API cannot see the deployment. It is unused; delete
+  the Vercel project or keep the code as a fallback (`APS_RELAY_URL` + `APS_RELAY_KEY`).
+- The E2E project "E2E Test Residence" in the database is the walkthrough above run by Claude; delete or reuse it.
 - Calc modules beyond wood-beam are first-pass engines with explicit REVIEW gates; deepen them one file at a time in `services/calc/src/modules/`.
