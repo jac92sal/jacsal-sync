@@ -26,8 +26,7 @@
 - Units from `$INSUNITS` (inches assumed when unitless). Model geometry is stored in feet.
 
 ## Known gaps / decisions for you
-- **GitHub repo not created** (the session's GitHub grant cannot create repos). Create `jac92sal/jacsal-sync` (empty, private) and
-  push from the archive, or tell Claude to push once it exists.
+- **GitHub repo:** `jac92sal/jacsal-sync` (`main`). All work is pushed there.
 - **Rotate the three credentials that were uploaded in plain text** (Anthropic key, Autodesk client secret, ArcGIS client secret).
   Autodesk + ArcGIS values are now in the Secrets Store (`APS_*`, `ARCGIS_*`); the Anthropic key was **not** stored anywhere.
 - **ArcGIS works, with two rules.** The API key credential is referrer-restricted, so the GIS Worker sends

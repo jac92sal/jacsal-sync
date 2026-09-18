@@ -13,7 +13,7 @@ and blocks issue on any mismatch.
 | **Subdomain** | `sync.jacsalservices.com` |
 | **Worker** | `jacsal-sync` (custom domain route) + service Workers below |
 | **Frontend** | React + Vite SPA, Tailwind v4, served as static assets |
-| **Repo** | `VVVweb/jacsal-sync` (`main`) — monorepo: app at root, `services/*` |
+| **Repo** | `jac92sal/jacsal-sync` (`main`) — monorepo: app at root, `services/*` |
 | **Spec** | `docs/Engineering_CA_Wood_v11.xlsx` (workbook is the calculation spec + app contract, not a database) |
 
 ## Workers (all in this repo)
