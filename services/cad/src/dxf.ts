@@ -16,6 +16,8 @@ export interface DxfEntity {
   attribs?: Record<string, string>
   dimMeasurement?: number
   dimType?: number
+  /** Index into DxfDocument.models when the entity belongs to a detected model page. */
+  model?: number
 }
 export interface DxfDocument {
   /** $INSUNITS: 1 = inches, 2 = feet, 4 = mm, 5 = cm, 6 = m, 0 = unitless */
@@ -25,7 +27,10 @@ export interface DxfDocument {
   entities: DxfEntity[]
   /** Present after parsing: how much of the file was retained. */
   stats?: DxfStats
+  /** Model pages (floor plans) found in model space; see models.ts. */
+  models?: ModelRegion[]
 }
+export interface ModelRegion { ix: number; title: string; labels: string[]; bbox: { minX: number; minY: number; maxX: number; maxY: number }; entityCount: number; wallCount: number }
 type Raw = Record<string, string[]>
 
 /** Units → feet multiplier. Unitless drawings are assumed to be inches (architectural default). */

@@ -5,6 +5,7 @@ import Projects from './pages/Projects'
 import ProjectShell from './pages/ProjectShell'
 import Dashboard from './pages/Dashboard'
 import CadConfirm from './pages/CadConfirm'
+import ModelReview from './pages/ModelReview'
 import ObjectModel from './pages/ObjectModel'
 import ChangeImpact from './pages/ChangeImpact'
 import Calcs from './pages/Calcs'
@@ -21,7 +22,8 @@ export default function App() {
       <Route path="/settings" element={<Settings />} />
       <Route path="/p/:id" element={<ProjectShell />}>
         <Route index element={<Dashboard />} />
-        <Route path="cad" element={<CadConfirm />} />
+        <Route path="cad" element={<ModelReview />} />
+        <Route path="cad/list" element={<CadConfirm />} />
         <Route path="objects" element={<ObjectModel />} />
         <Route path="changes" element={<ChangeImpact />} />
         <Route path="changes/:changeId" element={<ChangeImpact />} />

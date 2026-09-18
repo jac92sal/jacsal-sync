@@ -90,3 +90,24 @@ describe('DxfStreamParser', () => {
     }
   })
 })
+
+import { findModels } from '../src/models'
+describe('findModels', () => {
+  it('groups room labels into model pages and tags nearby geometry', () => {
+    const k = 12 // inches
+    const text = (h: string, t: string, x: number, y: number) => ({ handle: h, type: 'MTEXT', layer: 'TXT', points: [{ x: x * k, y: y * k }], text: t })
+    const line = (h: string, x1: number, y1: number, x2: number, y2: number, layer = 'A-WALL') => ({ handle: h, type: 'LINE', layer, points: [{ x: x1 * k, y: y1 * k }, { x: x2 * k, y: y2 * k }] })
+    const doc = { insunits: 1, entities: [
+      text('t1', 'KITCHEN', 10, 10), text('t2', 'BATH', 30, 12), text('t3', 'LIVING', 20, 30),
+      line('w1', 0, 0, 40, 0), line('w2', 40, 0, 40, 40), line('w3', 0, 0, 0, 40),
+      text('t4', 'BEDROOM', 500, 10), text('t5', 'HALL', 520, 20), line('w4', 490, 0, 540, 0), line('w5', 490, 0, 490, 30),
+      text('t6', 'SCOPE OF WORK', 1000, 10), line('border', -100, -100, 2000, -100),
+    ] }
+    const models = findModels(doc as never)
+    expect(models.length).toBe(2)
+    expect(models[0].labels).toEqual(['Kitchen', 'Bath', 'Living'])
+    expect(models[0].wallCount).toBe(3)
+    expect(models[1].labels).toEqual(['Bedroom', 'Hall'])
+    expect((doc.entities.find((e) => e.handle === 'border') as { model?: number }).model).toBeUndefined()
+  })
+})

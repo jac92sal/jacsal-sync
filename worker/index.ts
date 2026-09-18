@@ -246,8 +246,23 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (seg[0] === 'candidates' && seg[1] && method === 'POST') {
     const cand = await one<CandidateRow>(db, 'SELECT * FROM candidates WHERE id = ?', seg[1])
     if (!cand) throw notFound('Candidate not found.')
-    const b = await readJson<{ action: 'CONFIRM' | 'EDIT' | 'IGNORE'; value?: unknown; humanName?: string; semanticTag?: string; anchorRule?: string }>(request)
-    if (b.humanName || b.semanticTag || b.anchorRule) await run(db, 'UPDATE candidates SET human_name = COALESCE(?, human_name), semantic_tag = COALESCE(?, semantic_tag), anchor_rule = COALESCE(?, anchor_rule) WHERE id = ?', b.humanName ?? null, b.semanticTag ?? null, b.anchorRule ?? null, cand.id)
+    const b = await readJson<{ action: 'CONFIRM' | 'EDIT' | 'IGNORE'; value?: unknown; humanName?: string; semanticTag?: string; anchorRule?: string; kind?: string }>(request)
+    // Step one is where the person names what they see: a label given here becomes the object's name and tag.
+    let semanticTag = b.semanticTag?.trim() || undefined
+    const humanName = b.humanName?.trim() || undefined
+    let kind = cand.kind
+    if (b.kind && b.kind !== cand.kind) {
+      const swaps: Record<string, string[]> = { WINDOW: ['DOOR'], DOOR: ['WINDOW'], WALL: ['BEAM', 'SHEAR_WALL'], BEAM: ['WALL'], SHEAR_WALL: ['WALL'] }
+      if (!swaps[cand.kind]?.includes(b.kind)) throw badRequest(`A ${cand.kind} cannot be relabeled as ${b.kind}; its geometry does not fit.`)
+      kind = b.kind
+    }
+    if (humanName && !semanticTag) semanticTag = `${kind}.${humanName.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}`
+    if (semanticTag && (b.action === 'CONFIRM' || b.action === 'EDIT')) {
+      // Keep tags unique per project: a second "Kitchen North Wall" becomes ..._2.
+      const base = semanticTag; let n = 1
+      while (await one(db, 'SELECT id FROM objects WHERE project_id = ? AND semantic_tag = ?', cand.project_id, semanticTag)) semanticTag = `${base}_${++n}`
+    }
+    if (humanName || semanticTag || b.anchorRule || kind !== cand.kind) await run(db, 'UPDATE candidates SET human_name = COALESCE(?, human_name), semantic_tag = COALESCE(?, semantic_tag), anchor_rule = COALESCE(?, anchor_rule), kind = ? WHERE id = ?', humanName ?? null, semanticTag ?? null, b.anchorRule ?? null, kind, cand.id)
     const fresh = (await one<CandidateRow>(db, 'SELECT * FROM candidates WHERE id = ?', cand.id))!
     if (b.action === 'IGNORE') { await run(db, `UPDATE candidates SET action = 'IGNORE', confirmed_by = ?, confirmed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, actor, cand.id); return ok({ candidate: hydrateCandidate((await one<CandidateRow>(db, 'SELECT * FROM candidates WHERE id = ?', cand.id))!) }) }
     if (b.action !== 'CONFIRM' && b.action !== 'EDIT') throw badRequest('action must be CONFIRM, EDIT or IGNORE.')
@@ -282,7 +297,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       const obj = await env.FILES.get(key); if (!obj) throw notFound('File bytes not found.')
       return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType ?? 'application/octet-stream', 'content-disposition': `attachment; filename="${key.split('/').pop()}"` } })
     }
-    if (seg[2] === 'entities' && method === 'GET') return ok({ file, entities: (await all(db, 'SELECT handle, layer, etype, geometry, attributes FROM cad_entities WHERE file_id = ? LIMIT 5000', file.id)).map((e) => ({ ...e, geometry: JSON.parse(e.geometry as string), attributes: JSON.parse(e.attributes as string) })) })
+    if (seg[2] === 'entities' && method === 'GET') {
+      const model = url.searchParams.get('model')
+      const rows = model !== null
+        ? await all(db, 'SELECT handle, layer, etype, model_ix, geometry, attributes FROM cad_entities WHERE file_id = ? AND model_ix = ? LIMIT 12000', file.id, Number(model))
+        : await all(db, 'SELECT handle, layer, etype, model_ix, geometry, attributes FROM cad_entities WHERE file_id = ? LIMIT 5000', file.id)
+      return ok({ file, entities: rows.map((e) => ({ ...e, geometry: JSON.parse(e.geometry as string), attributes: JSON.parse(e.attributes as string) })) })
+    }
+    if (seg[2] === 'models' && method === 'GET') return ok({ file, models: JSON.parse((file.models as string | null) ?? '[]'), insunits: file.insunits ?? null })
     if (seg[2] === 'jobs' && method === 'GET') return ok({ jobs: await all(db, 'SELECT * FROM cad_jobs WHERE file_id = ? ORDER BY created_at DESC', file.id) })
     // Re-run detection on the stored DXF (after detector improvements) without re-uploading or re-converting.
     if (seg[2] === 'rescan' && method === 'POST') {

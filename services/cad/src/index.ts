@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { DxfStreamParser, parseDxf, type DxfDocument, type DxfEntity } from './dxf'
 import { detect, type Candidate } from './detect'
+import { findModels } from './models'
 import * as aps from './aps'
 import puppeteer from '@cloudflare/puppeteer'
 import { patchDxf } from './patch'
@@ -56,8 +57,13 @@ export class CadService extends WorkerEntrypoint<Env> {
       parser.push(value)
     }
     const doc = parser.end()
-    const candidates = detect(doc)
-    return { doc: { ...doc, entities: doc.entities.slice(0, returnEntities) }, candidates, entityCount: doc.entities.length }
+    // Model pages: when a sheet set is found, detection runs on the floor plans only and their entities are returned first.
+    const models = findModels(doc)
+    doc.models = models
+    const scoped = models.length ? doc.entities.filter((e) => e.model !== undefined) : doc.entities
+    const candidates = detect({ ...doc, entities: scoped })
+    const ordered = models.length ? [...scoped, ...doc.entities.filter((e) => e.model === undefined)] : doc.entities
+    return { doc: { ...doc, entities: ordered.slice(0, returnEntities) }, candidates, entityCount: doc.entities.length }
   }
 
   /** Design Automation: submit a job. `kind` decides the script. Returns the workitem id. */

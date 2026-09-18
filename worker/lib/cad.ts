@@ -34,7 +34,7 @@ export async function getFile(db: D1Database, id: string): Promise<FileRow> {
 /** Parse + detect (streamed from R2 inside the CAD service), retain entities, and queue candidates for human confirmation. */
 export async function ingestDxf(db: D1Database, cad: Cad, projectId: string, fileId: string, dxfKey: string) {
   const { doc, candidates, entityCount } = await cad.analyzeR2(dxfKey)
-  const entityStmts = doc.entities.slice(0, 20000).map((e) => insertStmt(db, 'cad_entities', { id: uuid(), file_id: fileId, project_id: projectId, handle: e.handle, layer: e.layer, etype: e.type, geometry: { points: e.points, closed: e.closed, rotation: e.rotation, height: e.height }, attributes: { text: e.text, blockName: e.blockName, attribs: e.attribs, dimMeasurement: e.dimMeasurement, dimType: e.dimType } }))
+  const entityStmts = doc.entities.slice(0, 20000).map((e) => insertStmt(db, 'cad_entities', { id: uuid(), file_id: fileId, project_id: projectId, handle: e.handle, layer: e.layer, etype: e.type, model_ix: e.model ?? null, geometry: { points: e.points, closed: e.closed, rotation: e.rotation, height: e.height }, attributes: { text: e.text, blockName: e.blockName, attribs: e.attribs, dimMeasurement: e.dimMeasurement, dimType: e.dimType } }))
   const existing = new Set((await all<{ ckey: string }>(db, `SELECT ckey FROM candidates WHERE project_id = ? AND action <> 'PENDING'`, projectId)).map((r) => r.ckey))
   const candStmts = candidates.filter((c) => !existing.has(c.key)).map((c: Candidate) => insertStmt(db, 'candidates', {
     id: uuid(), project_id: projectId, file_id: fileId, kind: c.kind, human_name: c.humanName, semantic_tag: c.semanticTag, detected_value: c.detectedValue, unit: c.unit ?? null, confidence: c.confidence,
@@ -44,8 +44,8 @@ export async function ingestDxf(db: D1Database, cad: Cad, projectId: string, fil
   await run(db, `DELETE FROM candidates WHERE file_id = ? AND action = 'PENDING'`, fileId)
   for (let i = 0; i < entityStmts.length; i += 200) await db.batch(entityStmts.slice(i, i + 200))
   for (let i = 0; i < candStmts.length; i += 200) await db.batch(candStmts.slice(i, i + 200))
-  await updateStmt(db, 'cad_files', fileId, { status: 'PARSED', dxf_r2_key: dxfKey, entity_count: entityCount, error: null }).run()
-  return { entities: entityCount, retained: doc.entities.length, candidates: candStmts.length, insunits: doc.insunits, stats: doc.stats ?? null }
+  await updateStmt(db, 'cad_files', fileId, { status: 'PARSED', dxf_r2_key: dxfKey, entity_count: entityCount, error: null, models: JSON.stringify(doc.models ?? []), insunits: doc.insunits }).run()
+  return { entities: entityCount, retained: doc.entities.length, candidates: candStmts.length, insunits: doc.insunits, models: doc.models ?? [], stats: doc.stats ?? null }
 }
 
 export async function submitJob(db: D1Database, cad: Cad, projectId: string, fileId: string, changeId: string | null, kind: 'CONVERT' | 'WRITEBACK' | 'RESCAN', inputR2Key: string, ops: WriteOp[], callbackBase: string) {

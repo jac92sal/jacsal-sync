@@ -12,7 +12,7 @@ export default function ProjectShell() {
   const reload = useCallback(async () => { const r = await api.get<{ project: Project; gate: ShellCtx['gate']; counts: Record<string, number> }>(`/projects/${id}`); setCtx({ project: r.project, gate: r.gate, counts: r.counts, reload }) }, [id])
   useEffect(() => { void reload() }, [reload])
   const nav = [
-    { to: '', label: 'Dashboard', icon: LayoutDashboard, end: true }, { to: 'cad', label: '00_CAD_CONFIRM', icon: FileCheck2, badge: ctx?.counts.pending_candidates },
+    { to: '', label: 'Dashboard', icon: LayoutDashboard, end: true }, { to: 'cad', label: '01_MODEL_REVIEW', icon: FileCheck2, badge: ctx?.counts.pending_candidates },
     { to: 'objects', label: '00_OBJECT_MODEL', icon: Boxes, badge: ctx?.counts.objects }, { to: 'changes', label: '00_CHANGE_IMPACT', icon: GitCompareArrows, badge: ctx?.counts.open_changes },
     { to: 'calcs', label: 'CALCULATIONS', icon: Calculator, badge: ctx?.counts.calc_runs }, { to: 'gate', label: '00_ISSUE_GATE', icon: ShieldCheck },
   ]
