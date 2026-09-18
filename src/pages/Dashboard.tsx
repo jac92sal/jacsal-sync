@@ -28,6 +28,7 @@ export default function Dashboard() {
       await ctx.reload()
     } catch (e) { setVerifyMsg({ ok: false, text: (e as Error).message }) } finally { setVerifying(false) }
   }
+  const rescan = async (id: string) => { setBusy(true); setMsg(''); try { const r = await api.post<{ entities: number; candidates: number }>(`/files/${id}/rescan`); setMsg(`Re-detected: ${r.entities} entities, ${r.candidates} new candidates to confirm in 00_CAD_CONFIRM.`); await load(); await ctx.reload() } catch (e) { setMsg((e as Error).message) } finally { setBusy(false) } }
   const poll = async (id: string) => { const j = await api.get<{ jobs: { id: string; status: string }[] }>(`/files/${id}/jobs`); for (const job of j.jobs.filter((x) => ['PENDING', 'INPROGRESS', 'QUEUED'].includes(x.status))) await api.post(`/jobs/${job.id}/poll`); await load(); await ctx.reload() }
   // While a DWG is converting, keep checking Design Automation so the row advances without a manual refresh.
   const converting = files.filter((f) => f.status === 'CONVERTING').map((f) => f.id).join(',')
@@ -47,7 +48,7 @@ export default function Dashboard() {
         <Card title="Drawings" right={<label className="btn btn-primary cursor-pointer">{busy ? 'Uploading…' : 'Upload DWG / DXF'}<input type="file" accept=".dwg,.dxf" className="hidden" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} /></label>}>
           {msg && <div className="p-3 text-sm bg-blue-50 border-b border-line">{msg}</div>}
           {files.length === 0 ? <div className="p-4 text-sm text-muted">No drawings yet.</div> : <table className="tbl"><thead><tr><th>File</th><th>Kind</th><th>Rev</th><th>Entities</th><th>Status</th><th></th></tr></thead><tbody>
-            {files.map((f) => <tr key={f.id}><td>{f.filename}{f.error && <div className="text-xs text-bad">{f.error.slice(0, 160)}</div>}</td><td>{f.kind}</td><td>{f.revision}</td><td>{f.entity_count ?? '—'}</td><td><Pill v={f.status} /></td><td className="whitespace-nowrap"><a className="text-accent text-xs mr-2" href={`/api/files/${f.id}/download`}>DWG/DXF</a><a className="text-accent text-xs mr-2" href={`/api/files/${f.id}/download?format=dxf`}>DXF</a>{f.status === 'CONVERTING' && <span className="text-xs text-muted">converting… <button className="text-accent" onClick={() => poll(f.id)}>check now</button></span>}</td></tr>)}
+            {files.map((f) => <tr key={f.id}><td>{f.filename}{f.error && <div className="text-xs text-bad">{f.error.slice(0, 160)}</div>}</td><td>{f.kind}</td><td>{f.revision}</td><td>{f.entity_count ?? '—'}</td><td><Pill v={f.status} /></td><td className="whitespace-nowrap"><a className="text-accent text-xs mr-2" href={`/api/files/${f.id}/download`}>DWG/DXF</a><a className="text-accent text-xs mr-2" href={`/api/files/${f.id}/download?format=dxf`}>DXF</a>{f.status === 'CONVERTING' && <span className="text-xs text-muted">converting… <button className="text-accent" onClick={() => poll(f.id)}>check now</button></span>}{f.status === 'PARSED' && <button className="text-accent text-xs" title="Run object detection again on the stored drawing" onClick={() => rescan(f.id)}>Re-detect</button>}</td></tr>)}
           </tbody></table>}
         </Card>
         <Card title="Setup"><div className="p-4 grid grid-cols-2 gap-3 text-sm">

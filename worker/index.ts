@@ -12,7 +12,7 @@ import { confirmCandidate, createObject, getObject, listObjects, patchObject, ty
 import { applyToModel, approveChange, getChange, listChanges, proposeChange } from './lib/impact'
 import { getCalcRun, listCalcRuns, runCalc } from './lib/calcs'
 import { issueGate } from './lib/gate'
-import { getFile, pendingJobs, processJob, uploadFile, writeBack } from './lib/cad'
+import { getFile, ingestDxf, pendingJobs, processJob, uploadFile, writeBack } from './lib/cad'
 import type { CalcService } from '../services/calc/src/index'
 import type { CadService } from '../services/cad/src/index'
 import { ARCGIS_PRIVILEGES, type GeocodeResult, type GisService } from '../services/gis/src/index'
@@ -284,6 +284,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     }
     if (seg[2] === 'entities' && method === 'GET') return ok({ file, entities: (await all(db, 'SELECT handle, layer, etype, geometry, attributes FROM cad_entities WHERE file_id = ? LIMIT 5000', file.id)).map((e) => ({ ...e, geometry: JSON.parse(e.geometry as string), attributes: JSON.parse(e.attributes as string) })) })
     if (seg[2] === 'jobs' && method === 'GET') return ok({ jobs: await all(db, 'SELECT * FROM cad_jobs WHERE file_id = ? ORDER BY created_at DESC', file.id) })
+    // Re-run detection on the stored DXF (after detector improvements) without re-uploading or re-converting.
+    if (seg[2] === 'rescan' && method === 'POST') {
+      const dxfKey = file.kind === 'DXF' ? (file.dxf_r2_key ?? file.r2_key) : file.dxf_r2_key
+      if (!dxfKey) throw badRequest('This drawing has not been converted yet.')
+      const r = await ingestDxf(db, cad(env), file.project_id, file.id, dxfKey)
+      await insertStmt(db, 'audit_log', { id: uuid(), project_id: file.project_id, actor, action: 'file.rescanned', target_kind: 'FILE', target_id: file.id, detail: { entities: r.entities, candidates: r.candidates } }).run()
+      return ok({ file: await getFile(db, file.id), ...r })
+    }
     if (!seg[2] && method === 'GET') return ok({ file })
   }
   if (seg[0] === 'jobs' && seg[1] && seg[2] === 'poll' && method === 'POST') return ok(await processJob(db, env.FILES, cad(env), seg[1]))

@@ -18,7 +18,22 @@ export interface Candidate {
   representations?: { handle: string; repType: string; role: string }[]
 }
 
-const slug = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '')
+const slug = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)
+
+/** Words that mark a text as a room name on architectural plans. */
+const ROOM_WORDS = /\b(KITCHEN|KIT|BATH(ROOM)?|BA|BED(ROOM)?|BR|MASTER|MBR|LIVING|LIV|DINING|DIN|FAMILY|FAM|GREAT|HALL(WAY)?|ENTRY|FOYER|PORCH|PATIO|DECK|GARAGE|GAR|CARPORT|CLOSET|CL|WIC|LAUNDRY|LNDRY|UTILITY|UTIL|MECH|STORAGE|STOR|OFFICE|STUDY|DEN|LOFT|NOOK|PANTRY|MUD ?ROOM|POWDER|STAIR(S)?|ADU|UNIT|SUITE|ROOM|RM|W\/D|WC|SHOWER|VESTIBULE|LOBBY|CORRIDOR|BALCONY|LANAI|SUNROOM|BONUS|MEDIA|GYM|SHOP|BASEMENT|ATTIC|CRAWL ?SPACE)\b/i
+/** Texts that live in title blocks, notes, and schedules: never a room name. */
+const NOT_A_ROOM = /\b(SCOPE|NOTE|NOTES|DATE|SHEET|SCALE|CHAPTER|ELEVATION|ELEVATIONS|SECTION|DETAIL|LEGEND|REVISION|ISSUED|DRAWN|CHECKED|PROJECT|CLIENT|OWNER|ADDRESS|TITLE|GENERAL|EXISTING|PROPOSED|DEMO|PLAN|SITE|ROOF|FLOOR PLAN|SCHEDULE|SPECIFICATION|CONTRACTOR|INSTALL|SHALL|PER\b|CODE|AVE|STREET|ST\b|CA \d{5})\b/i
+
+/** Is this text plausible as the label of one room? */
+function roomLabelScore(text: string): number {
+  const t = text.replace(/\s+/g, ' ').trim()
+  if (!t || t.length > 32 || t.split(' ').length > 4) return 0
+  if (/^[\d'"\-\.\s x×]+$/i.test(t)) return 0            // dimensions like 12'-6" or 10x12
+  if (NOT_A_ROOM.test(t)) return 0
+  if (ROOM_WORDS.test(t)) return 1
+  return /^[A-Z][A-Z ]{1,20}\d?$/i.test(t) ? 0.5 : 0
+}
 const isWallLayer = (l: string) => /WALL|A-WALL|S-WALL|PARTITION/i.test(l)
 const isWindowBlock = (n = '') => /WIN|WDW|WINDOW/i.test(n)
 const isDoorBlock = (n = '') => /DOOR|DR[_-]|DOR/i.test(n)
@@ -29,14 +44,22 @@ export function detect(doc: DxfDocument): Candidate[] {
   const texts = doc.entities.filter((e) => (e.type === 'TEXT' || e.type === 'MTEXT') && e.text)
   const dims = doc.entities.filter((e) => e.type === 'DIMENSION')
 
-  // Rooms: closed polylines with a plausible floor area; label = text inside.
-  const rooms = doc.entities.filter((e) => e.type === 'LWPOLYLINE' && e.closed && e.points.length >= 4 && polygonArea(e.points) * k * k > 20)
+  // Rooms: closed polylines with a plausible floor area (15–2,500 sf, simple outline); label = the best room-like text inside.
+  // Title blocks, note boxes and sheet borders are closed polylines too, so the label and area filters matter on real sheet sets.
+  const rooms = doc.entities.filter((e) => { if (e.type !== 'LWPOLYLINE' || !e.closed || e.points.length < 4 || e.points.length > 24) return false; const a = polygonArea(e.points) * k * k; return a >= 15 && a <= 2500 })
   const roomKeys = new Map<DxfEntity, string>()
+  const seenNames = new Map<string, number>()
   for (const r of rooms) {
-    const label = texts.find((t) => pointInPolygon(t.points[0], r.points))
-    const name = label?.text?.replace(/\s+/g, ' ').trim() || `Room ${r.handle}`
+    const inside = texts.filter((t) => pointInPolygon(t.points[0], r.points)).map((t) => ({ t, score: roomLabelScore(t.text ?? '') })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || (a.t.text?.length ?? 0) - (b.t.text?.length ?? 0))
+    const label = inside[0]?.t
+    const labelScore = inside[0]?.score ?? 0
+    const area = polygonArea(r.points) * k * k
+    if (!label && (area < 40 || area > 1500)) continue           // unlabeled and not room-sized: almost certainly a border or a box
+    let name = label?.text?.replace(/\s+/g, ' ').trim() || `Room ${r.handle}`
+    // Same name twice on one sheet set (existing vs proposed, two bedrooms): number them so tags stay unique.
+    const n = (seenNames.get(name.toUpperCase()) ?? 0) + 1; seenNames.set(name.toUpperCase(), n); if (n > 1) name = `${name} ${n}`
     const key = `ROOM:${r.handle}`; roomKeys.set(r, key)
-    out.push({ key, kind: 'ROOM', humanName: titleCase(name), semanticTag: `ROOM.${slug(name)}`, detectedValue: { points: r.points.map((p) => ({ x: p.x * k, y: p.y * k })), area_sf: polygonArea(r.points) * k * k }, unit: 'ft', confidence: label ? 0.8 : 0.5, sourceHandles: [r.handle, ...(label ? [label.handle] : [])], method: 'closed-polyline + label',
+    out.push({ key, kind: 'ROOM', humanName: titleCase(name), semanticTag: `ROOM.${slug(name)}`, detectedValue: { points: r.points.map((p) => ({ x: p.x * k, y: p.y * k })), area_sf: area }, unit: 'ft', confidence: labelScore >= 1 ? 0.85 : label ? 0.6 : 0.4, sourceHandles: [r.handle, ...(label ? [label.handle] : [])], method: label ? 'closed-polyline + room label' : 'closed-polyline (unlabeled)',
       representations: [{ handle: r.handle, repType: 'GEOMETRY', role: 'room-boundary' }, ...(label ? [{ handle: label.handle, repType: 'TEXT', role: 'room-label' }] : [])] })
     // Walls from room edges, named by compass direction relative to the room centroid.
     const cx = r.points.reduce((s, p) => s + p.x, 0) / r.points.length; const cy = r.points.reduce((s, p) => s + p.y, 0) / r.points.length
