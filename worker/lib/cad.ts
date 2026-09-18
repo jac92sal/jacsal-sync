@@ -80,7 +80,7 @@ export async function submitJob(db: D1Database, cad: Cad, projectId: string, fil
 }
 
 /** Poll or callback: advance a job to its terminal state and process outputs. */
-export async function processJob(db: D1Database, _bucket: R2Bucket, cad: Cad, jobId: string): Promise<{ status: string }> {
+export async function processJob(db: D1Database, _bucket: R2Bucket, cad: Cad, jobId: string): Promise<{ status: string; fileId?: string; kind?: string }> {
   const job = await one<Record<string, unknown>>(db, 'SELECT * FROM cad_jobs WHERE id = ?', jobId)
   if (!job) throw notFound('Job not found.')
   if (!['QUEUED', 'PENDING', 'INPROGRESS'].includes(job.status as string)) return { status: job.status as string }
@@ -114,7 +114,7 @@ export async function processJob(db: D1Database, _bucket: R2Bucket, cad: Cad, jo
     await reconcile(db, cad, projectId, file.id, job.change_id as string | null, dxfKey)
   }
   await updateStmt(db, 'cad_jobs', jobId, { status: 'SUCCESS', report_url: st.reportUrl ?? null }).run()
-  return { status: 'SUCCESS' }
+  return { status: 'SUCCESS', fileId: file.id, kind: job.kind as string }
 }
 
 /** Re-scan: does every representation now show what the verified model says? */

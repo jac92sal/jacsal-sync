@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 import type { ShellCtx } from './ProjectShell'
-import { api, ftIn, unitsToFeet, type CadEntity, type CadFile, type Candidate, type ModelRegion, type Obj } from '../lib/api'
+import { api, ftIn, unitsToFeet, type AgentReview, type CadEntity, type CadFile, type Candidate, type ModelRegion, type Obj } from '../lib/api'
 import { Card, Pill } from '../components/ui'
 import { focusBox } from '../components/PlanViewer'
 import { ApsViewer, type ViewerHandle } from '../components/ApsViewer'
@@ -35,6 +35,15 @@ export default function ModelReview() {
   const [viewer, setViewer] = useState<{ urn: string; status: string; progress: string; messages: string[] } | null>(null)
   const [viewerErr, setViewerErr] = useState('')
   const vh = useRef<ViewerHandle | null>(null)
+  const [review, setReview] = useState<AgentReview | null>(null)
+  const [reviewBusy, setReviewBusy] = useState(false)
+  const [reviewErr, setReviewErr] = useState('')
+  const loadReview = async () => { if (!fileId) return; setReview((await api.get<{ review: AgentReview | null }>(`/files/${fileId}/review`)).review) }
+  useEffect(() => { void loadReview() }, [fileId]) // eslint-disable-line react-hooks/exhaustive-deps
+  const runReview = async () => {
+    setReviewBusy(true); setReviewErr('')
+    try { setReview((await api.post<{ review: AgentReview }>(`/files/${fileId}/review`)).review); await loadPlans(); await ctx.reload() } catch (e) { setReviewErr((e as Error).message) } finally { setReviewBusy(false) }
+  }
 
   const k = unitsToFeet(insunits)
   const file = files.find((f) => f.id === fileId)
@@ -124,7 +133,15 @@ export default function ModelReview() {
   const usable = models.filter((m) => planOf(m)?.properties.use !== false)
   if (!opened && models.length > 0) return (
     <Card title="Floor plans in this drawing" right={<div className="flex items-center gap-2 text-xs">{files.length > 1 && <select className="input py-1" value={fileId} onChange={(e) => setFileId(e.target.value)}>{files.map((f) => <option key={f.id} value={f.id}>{f.filename}</option>)}</select>}<Link className="text-accent underline" to="list">table view</Link></div>}>
-      <p className="px-4 py-3 text-sm text-muted border-b border-line">Each floor plan came in as one unit. Name the real ones, mark duplicates or other views as not a plan, then open a plan to break it down into walls, rooms, and openings. Elevations, sections, and schedules are built from these plans later.</p>
+      <div className="px-4 py-3 text-sm border-b border-line space-y-2">
+        <p className="text-muted">Each floor plan came in as one unit. Claude reviews what the scan found and keeps only the basic floor plans; you can override any decision, then open a plan to break it down into walls, rooms, and openings. Elevations, sections, and schedules are built from these plans later.</p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <button className="btn btn-primary py-1" disabled={reviewBusy} onClick={runReview}>{reviewBusy ? 'Claude is reviewing…' : review ? 'Ask Claude to review again' : 'Ask Claude to review'}</button>
+          {review && <span className="text-xs text-muted">Reviewed {new Date(review.at).toLocaleString()} · {review.pages.filter((p) => p.keep).length} of {review.pages.length} kept · {review.model}</span>}
+          {reviewErr && <span className="text-xs text-bad">{reviewErr}</span>}
+        </div>
+        {review && <p className="text-xs">{review.summary}{review.buildings.length ? <> Buildings: {review.buildings.join(', ')}.</> : null}</p>}
+      </div>
       <div className="p-4 grid gap-3 md:grid-cols-2">
         {models.map((m) => { const p = planOf(m); const use = p?.properties.use !== false; const pr = pageProgress(m); return (
           <div key={m.ix} className={`border border-line rounded p-3 text-sm ${use ? '' : 'opacity-50'}`}>
@@ -133,6 +150,7 @@ export default function ModelReview() {
               <Pill v={use ? (pr.total && pr.done === pr.total ? 'DONE' : pr.done ? 'IN PROGRESS' : 'NEW') : 'SKIPPED'} />
             </div>
             <div className="text-xs text-muted mt-1">Labels seen: {m.labels.slice(0, 8).join(', ')}{m.labels.length > 8 ? '…' : ''}</div>
+            {(() => { const a = p?.properties.agent as { kind?: string; state?: string; reason?: string; keep?: boolean } | undefined; return a ? <div className={`text-xs mt-1 ${a.keep ? 'text-ok' : 'text-muted'}`}>Claude: {a.keep ? 'keep' : 'set aside'} · {a.kind?.replace('_', ' ')}{a.state && a.state !== 'unknown' ? `, ${a.state}` : ''} · {a.reason}</div> : null })()}
             <div className="text-xs text-muted">{m.entityCount.toLocaleString()} drawing entities · {m.wallCount} wall-layer elements · {pr.done} of {pr.total} elements reviewed</div>
             <div className="flex gap-2 mt-2">
               <button className="btn btn-primary py-1" disabled={!use} onClick={() => { setModelIx(m.ix); setActiveId(null); setOpened(true) }}>Open and break down</button>

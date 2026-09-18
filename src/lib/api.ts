@@ -39,3 +39,5 @@ export interface GeocodeResult { matchedAddress: string; lat: number; lng: numbe
 export const CODE_PATHS = ['CBC', 'CRC', 'IBC', 'IRC'] as const
 export const RISK_CATEGORIES = ['I', 'II', 'III', 'IV'] as const
 export const DESIGN_METHODS = ['ASD', 'LRFD'] as const
+export interface AgentPage { ix: number; keep: boolean; kind: string; name: string; building: string; state: string; level: string; confidence: number; reason: string }
+export interface AgentReview { summary: string; buildings: string[]; pages: AgentPage[]; model: string; at: string }

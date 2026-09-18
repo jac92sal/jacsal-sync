@@ -24,7 +24,9 @@
     { "binding": "GIS",  "service": "jacsal-sync-gis",  "entrypoint": "GisService" }
   ],
   "secrets_store_secrets": [
-    { "binding": "SYNC_CALLBACK_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "SYNC_CALLBACK_SECRET" }
+    { "binding": "SYNC_CALLBACK_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "SYNC_CALLBACK_SECRET" },
+    // Master key for sealed values in app_settings (the Claude API key entered in Settings). Shared with the GIS service.
+    { "binding": "APP_KEK",              "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APP_KEK" }
   ],
   // Poll Design Automation jobs whose onComplete callback was missed.
   "triggers": { "crons": ["*/2 * * * *"] },

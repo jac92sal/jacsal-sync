@@ -16,6 +16,8 @@ import { getFile, ingestDxf, pendingJobs, processJob, removeFile, uploadFile, wr
 import type { CalcService } from '../services/calc/src/index'
 import type { CadService } from '../services/cad/src/index'
 import { ARCGIS_PRIVILEGES, type GeocodeResult, type GisService } from '../services/gis/src/index'
+import { CLAUDE_KEY, CLAUDE_MODEL, reviewPlans, testClaude } from './lib/agent'
+import { clearSealed, hasSealed, setSealed } from './lib/settings'
 
 const SESSION_COOKIE = 'jacsal_session'
 interface AuthUser { id: string; email: string; name: string | null; emailVerified: boolean }
@@ -25,6 +27,11 @@ interface AuthService {
   verifyCode(email: string, code: string, meta?: { userAgent?: string; ip?: string }): Promise<{ ok: true; sessionToken: string; ttlSeconds: number; user: AuthUser } | { ok: false; error: string }>
   getSession(token: string): Promise<AuthUser | null>
   logout(token: string): Promise<void>
+}
+/** After a conversion finishes, let Claude decide which pages are the floor plans (best effort, never blocks the job). */
+async function reviewAfterJob(env: Env, r: { status: string; fileId?: string; kind?: string }): Promise<void> {
+  if (r.status !== 'SUCCESS' || r.kind !== 'CONVERT' || !r.fileId) return
+  try { await reviewPlans(env, r.fileId, 'agent') } catch (e) { console.error(JSON.stringify({ level: 'warn', msg: 'claude review failed', file: r.fileId, err: String(e) })) }
 }
 const auth = (env: Env) => env.AUTH as unknown as AuthService
 const calc = (env: Env) => env.CALC as unknown as CalcService
@@ -46,7 +53,7 @@ export default {
   /** Poll Design Automation jobs the callback may have missed. */
   async scheduled(_event, env, ctx) {
     const jobs = await pendingJobs(env.DB)
-    ctx.waitUntil(Promise.all(jobs.map((j) => processJob(env.DB, env.FILES, cad(env), j.id).catch((e) => console.error(JSON.stringify({ level: 'error', msg: 'job poll failed', job: j.id, err: String(e) }))))))
+    ctx.waitUntil(Promise.all(jobs.map((j) => processJob(env.DB, env.FILES, cad(env), j.id).then((r) => reviewAfterJob(env, r)).catch((e) => console.error(JSON.stringify({ level: 'error', msg: 'job poll failed', job: j.id, err: String(e) }))))))
   },
 } satisfies ExportedHandler<Env>
 
@@ -122,6 +129,24 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   // ---- Autodesk Viewer token for the browser (viewables:read only)
   if (seg[0] === 'viewer' && seg[1] === 'token' && method === 'GET') return ok(await cad(env).viewerToken())
+
+  // ---- settings → Claude review agent (key sealed in app_settings under APP_KEK; used server-side only)
+  if (seg[0] === 'settings' && seg[1] === 'claude') {
+    if (!seg[2] && method === 'GET') return ok({ configured: await hasSealed(env, CLAUDE_KEY), model: CLAUDE_MODEL })
+    if (seg[2] === 'key' && method === 'POST') {
+      const b = await readJson<{ apiKey?: string }>(request)
+      const key = b.apiKey?.trim() ?? ''
+      if (!/^sk-ant-/.test(key) || key.length < 40) throw badRequest('That does not look like an Anthropic API key (they start with sk-ant-).')
+      await setSealed(env, CLAUDE_KEY, key, actor)
+      const test = await testClaude(env)
+      if (!test.ok) { await clearSealed(env, CLAUDE_KEY); throw badRequest(`Key stored but rejected: ${test.error}`) }
+      await insertStmt(db, 'audit_log', { id: uuid(), project_id: null, actor, action: 'settings.claude_key.set', target_kind: 'SETTING', target_id: CLAUDE_KEY, detail: { models: test.models.length } }).run()
+      return ok({ configured: true, test })
+    }
+    if (seg[2] === 'key' && method === 'DELETE') { await clearSealed(env, CLAUDE_KEY); return ok({ configured: false }) }
+    if (seg[2] === 'test' && method === 'POST') return ok({ test: await testClaude(env) })
+    throw notFound()
+  }
 
   // ---- settings → ArcGIS API key (created from the user's ArcGIS sign-in; password is used in-request only)
   if (seg[0] === 'settings' && seg[1] === 'arcgis') {
@@ -333,11 +358,20 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       if (!dxfKey) throw badRequest('This drawing has not been converted yet.')
       const r = await ingestDxf(db, cad(env), file.project_id, file.id, dxfKey)
       await insertStmt(db, 'audit_log', { id: uuid(), project_id: file.project_id, actor, action: 'file.rescanned', target_kind: 'FILE', target_id: file.id, detail: { entities: r.entities, candidates: r.candidates } }).run()
+      ctx.waitUntil(reviewAfterJob(env, { status: 'SUCCESS', kind: 'CONVERT', fileId: file.id }))
       return ok({ file: await getFile(db, file.id), ...r })
     }
+    // Claude review on demand: which pages are the basic floor plans, names, reasons.
+    if (seg[2] === 'review' && method === 'POST') {
+      const review = await reviewPlans(env, file.id, actor)
+      if (!review) throw badRequest('No Claude API key is stored (Settings → Claude), or no pages were found in this drawing.')
+      await insertStmt(db, 'audit_log', { id: uuid(), project_id: file.project_id, actor, action: 'file.agent_reviewed', target_kind: 'FILE', target_id: file.id, detail: { kept: review.pages.filter((p) => p.keep).length, pages: review.pages.length, model: review.model } }).run()
+      return ok({ review })
+    }
+    if (seg[2] === 'review' && method === 'GET') return ok({ review: file.agent_review ? JSON.parse(file.agent_review as string) : null })
     if (!seg[2] && method === 'GET') return ok({ file })
   }
-  if (seg[0] === 'jobs' && seg[1] && seg[2] === 'poll' && method === 'POST') return ok(await processJob(db, env.FILES, cad(env), seg[1]))
+  if (seg[0] === 'jobs' && seg[1] && seg[2] === 'poll' && method === 'POST') { const r = await processJob(db, env.FILES, cad(env), seg[1]); ctx.waitUntil(reviewAfterJob(env, r)); return ok(r) }
   throw notFound('Unknown endpoint.')
 }
 
@@ -355,7 +389,7 @@ const callbackBase = (env: Env, url: URL) => env.PUBLIC_BASE_URL || `${url.proto
 async function cadCallback(_request: Request, env: Env, ctx: ExecutionContext, jobId: string, url: URL): Promise<Response> {
   const secret = await env.SYNC_CALLBACK_SECRET.get()
   if (!timingSafeEqual(url.searchParams.get('s') ?? '', secret)) throw forbidden('Bad callback signature.')
-  ctx.waitUntil(processJob(env.DB, env.FILES, cad(env), jobId).catch((e) => console.error(JSON.stringify({ level: 'error', msg: 'callback processing failed', job: jobId, err: String(e) }))))
+  ctx.waitUntil(processJob(env.DB, env.FILES, cad(env), jobId).then((r) => reviewAfterJob(env, r)).catch((e) => console.error(JSON.stringify({ level: 'error', msg: 'callback processing failed', job: jobId, err: String(e) }))))
   return ok({ accepted: true })
 }
 

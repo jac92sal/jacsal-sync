@@ -29,6 +29,15 @@ export default function Settings() {
   const [err, setErr] = useState('')
   const [test, setTest] = useState<TestResult | null>(null)
   const [done, setDone] = useState<KeyMeta | null>(null)
+  const [claude, setClaude] = useState<{ configured: boolean; model: string } | null>(null)
+  const [claudeKey, setClaudeKey] = useState('')
+  const [claudeMsg, setClaudeMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [claudeBusy, setClaudeBusy] = useState(false)
+  const loadClaude = async () => setClaude(await api.get<{ configured: boolean; model: string }>('/settings/claude'))
+  useEffect(() => { void loadClaude() }, [])
+  const saveClaude = async () => { setClaudeBusy(true); setClaudeMsg(null); try { const r = await api.post<{ test: { ok: boolean; models?: string[] } }>('/settings/claude/key', { apiKey: claudeKey }); setClaudeKey(''); setClaudeMsg({ ok: true, text: `Key accepted. ${r.test.models?.length ?? 0} models visible.` }); await loadClaude() } catch (e) { setClaudeMsg({ ok: false, text: (e as Error).message }) } finally { setClaudeBusy(false) } }
+  const testClaudeKey = async () => { setClaudeBusy(true); setClaudeMsg(null); try { const r = await api.post<{ test: { ok: boolean; error?: string; models?: string[] } }>('/settings/claude/test'); setClaudeMsg(r.test.ok ? { ok: true, text: `Working. ${r.test.models?.length ?? 0} models visible.` } : { ok: false, text: r.test.error ?? 'Failed' }) } catch (e) { setClaudeMsg({ ok: false, text: (e as Error).message }) } finally { setClaudeBusy(false) } }
+  const forgetClaude = async () => { if (!confirm('Remove the stored Claude API key? Uploads will no longer be reviewed automatically.')) return; await fetch('/api/settings/claude/key', { method: 'DELETE', credentials: 'same-origin' }); setClaudeMsg(null); await loadClaude() }
 
   const load = async () => {
     const r = await api.get<{ status: KeyStatus; privileges: Privilege[] }>('/settings/arcgis')
@@ -86,6 +95,17 @@ export default function Settings() {
                 ? <div className="text-ok">Elevation service answered: {test.elevationM.toFixed(1)} m at the White House (via {test.source}).</div>
                 : <div className="text-bad">Elevation call failed: {test.error}</div>)}
             </>}
+          </div>
+        </Card>
+
+        <Card title="Claude review agent" right={claude && <Pill v={claude.configured ? 'ACTIVE' : 'MISSING'} />}>
+          <div className="p-4 text-sm space-y-3">
+            <p className="text-muted">After every upload, Claude reviews the pages found in the drawing and decides which are the basic floor plans to bring in, names them, and sets the rest aside. It only sees a compact summary of each page (labels, counts, layer names), never the drawing. Model: <code>{claude?.model ?? '…'}</code>.</p>
+            {claude?.configured
+              ? <div className="flex gap-2"><button className="btn" disabled={claudeBusy} onClick={testClaudeKey}>{claudeBusy ? 'Testing…' : 'Test key'}</button><button className="btn" disabled={claudeBusy} onClick={forgetClaude}>Forget key</button></div>
+              : <div className="flex gap-2"><input className="input" type="password" placeholder="sk-ant-…" value={claudeKey} onChange={(e) => setClaudeKey(e.target.value)} autoComplete="off" /><button className="btn btn-primary" disabled={claudeBusy || !claudeKey.trim()} onClick={saveClaude}>{claudeBusy ? 'Checking…' : 'Save'}</button></div>}
+            {claudeMsg && <div className={`text-xs ${claudeMsg.ok ? 'text-ok' : 'text-bad'}`}>{claudeMsg.text}</div>}
+            <div className="text-xs text-muted">The key is encrypted with the app master key and never leaves the server. Create keys at console.anthropic.com and rotate them there.</div>
           </div>
         </Card>
 
