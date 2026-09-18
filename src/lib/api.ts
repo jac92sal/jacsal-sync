@@ -17,6 +17,7 @@ export const api = {
   post: <T>(p: string, b?: unknown) => call<T>('POST', p, b),
   put: <T>(p: string, b?: unknown) => call<T>('PUT', p, b),
   patch: <T>(p: string, b?: unknown) => call<T>('PATCH', p, b),
+  delete: <T>(p: string) => call<T>('DELETE', p),
   upload: <T>(p: string, bytes: ArrayBuffer, filename: string) => call<T>('POST', `${p}?filename=${encodeURIComponent(filename)}`, undefined, { bytes, filename }),
 }
 

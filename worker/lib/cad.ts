@@ -172,3 +172,39 @@ export async function writeBack(db: D1Database, bucket: R2Bucket, cad: Cad, proj
 export async function pendingJobs(db: D1Database, limit = 10) {
   return all<{ id: string }>(db, `SELECT id FROM cad_jobs WHERE status IN ('PENDING','INPROGRESS') ORDER BY created_at LIMIT ?`, limit)
 }
+
+/**
+ * Remove a drawing and everything derived from it, so a fresh upload starts clean:
+ * objects built from its candidates (and their changes, relations, calc runs via FK cascade),
+ * floor-plan units, candidates, entities, jobs, the row itself, and every stored revision in R2.
+ */
+export async function removeFile(db: D1Database, bucket: R2Bucket, fileId: string, actor: string): Promise<{ objects: number; candidates: number; r2Objects: number }> {
+  const file = await getFile(db, fileId)
+  const cands = await all<{ id: string; object_id: string | null }>(db, 'SELECT id, object_id FROM candidates WHERE file_id = ?', fileId)
+  const objectIds = new Set<string>(cands.map((c) => c.object_id).filter((x): x is string => !!x))
+  for (const o of await all<{ id: string; geometry_source: string | null }>(db, `SELECT id, geometry_source FROM objects WHERE project_id = ? AND geometry_source LIKE 'CAD:%'`, file.project_id)) {
+    const src = (o.geometry_source ?? '').slice(4)
+    if (src === fileId || cands.some((c) => c.id === src)) objectIds.add(o.id)
+  }
+  for (const o of await all<{ id: string; properties: string }>(db, `SELECT id, properties FROM objects WHERE project_id = ? AND type = 'FLOOR_PLAN'`, file.project_id)) {
+    if ((parseJson<{ fileId?: string }>(o.properties, {}).fileId) === fileId) objectIds.add(o.id)
+  }
+  const ids = [...objectIds]
+  const stmts: D1PreparedStatement[] = []
+  for (let i = 0; i < ids.length; i += 50) { const chunk = ids.slice(i, i + 50); const q = chunk.map(() => '?').join(','); stmts.push(db.prepare(`DELETE FROM objects WHERE id IN (${q})`).bind(...chunk)) }
+  stmts.push(db.prepare('DELETE FROM candidates WHERE file_id = ?').bind(fileId))
+  stmts.push(db.prepare('DELETE FROM cad_entities WHERE file_id = ?').bind(fileId))
+  stmts.push(db.prepare('DELETE FROM cad_jobs WHERE file_id = ?').bind(fileId))
+  stmts.push(db.prepare('DELETE FROM cad_files WHERE id = ?').bind(fileId))
+  stmts.push(insertStmt(db, 'audit_log', { id: uuid(), project_id: file.project_id, actor, action: 'file.removed', target_kind: 'FILE', target_id: fileId, detail: { filename: file.filename, objects: ids.length, candidates: cands.length } }))
+  await db.batch(stmts)
+  let r2Objects = 0
+  const prefix = `projects/${file.project_id}/files/${fileId}/`
+  for (let cursor: string | undefined; ;) {
+    const page = await bucket.list({ prefix, cursor })
+    if (page.objects.length) { await bucket.delete(page.objects.map((o) => o.key)); r2Objects += page.objects.length }
+    if (!page.truncated) break
+    cursor = page.cursor
+  }
+  return { objects: ids.length, candidates: cands.length, r2Objects }
+}

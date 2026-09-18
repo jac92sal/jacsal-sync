@@ -12,7 +12,7 @@ import { confirmCandidate, createObject, getObject, listObjects, patchObject, ty
 import { applyToModel, approveChange, getChange, listChanges, proposeChange } from './lib/impact'
 import { getCalcRun, listCalcRuns, runCalc } from './lib/calcs'
 import { issueGate } from './lib/gate'
-import { getFile, ingestDxf, pendingJobs, processJob, uploadFile, writeBack } from './lib/cad'
+import { getFile, ingestDxf, pendingJobs, processJob, removeFile, uploadFile, writeBack } from './lib/cad'
 import type { CalcService } from '../services/calc/src/index'
 import type { CadService } from '../services/cad/src/index'
 import { ARCGIS_PRIVILEGES, type GeocodeResult, type GisService } from '../services/gis/src/index'
@@ -295,6 +295,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   }
   if (seg[0] === 'files' && seg[1]) {
     const file = await getFile(db, seg[1])
+    if (!seg[2] && method === 'DELETE') return ok({ removed: await removeFile(db, env.FILES, file.id, actor) })
     if (seg[2] === 'download' && method === 'GET') {
       const key = url.searchParams.get('format') === 'dxf' ? file.dxf_r2_key ?? file.r2_key : file.r2_key
       const obj = await env.FILES.get(key); if (!obj) throw notFound('File bytes not found.')
