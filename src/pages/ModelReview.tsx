@@ -90,7 +90,7 @@ export default function ModelReview() {
   useEffect(() => {
     if (!vh.current) return
     if (active) vh.current.focusHandles(active.source_handles)
-    else if (entities.length) vh.current.fitHandles(entities.slice(0, 3000).map((e) => e.handle))
+    else if (entities.length) vh.current.fitHandles(entities.map((e) => e.handle))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, modelIx, entities.length, viewer?.status])
 
@@ -152,7 +152,7 @@ export default function ModelReview() {
         {models.length === 0 && file && <div className="px-4 pt-3 text-xs text-muted">No separate model pages were recognised in {file.filename}; showing the whole drawing.</div>}
         <div className="p-3" style={{ height: 620 }}>
           {viewer?.status === 'success'
-            ? <ApsViewer urn={viewer.urn} getToken={getToken} onSelectHandles={onSelectHandles} onReady={(h) => { vh.current = h; if (entities.length) h.fitHandles(entities.slice(0, 3000).map((e) => e.handle)) }} />
+            ? <ApsViewer urn={viewer.urn} getToken={getToken} onSelectHandles={onSelectHandles} onReady={(h) => { vh.current = h; if (entities.length) h.fitHandles(entities.map((e) => e.handle)) }} />
             : <div className="h-full grid place-items-center text-sm text-muted text-center px-6">
                 {viewerErr ? <span className="text-bad">{viewerErr}</span>
                   : viewer?.status === 'failed' || viewer?.status === 'timeout' ? <span className="text-bad">Autodesk could not translate this drawing ({viewer.status}). {viewer.messages.join(' ')} <button className="underline text-accent" onClick={() => api.post(`/files/${fileId}/viewer?force=1`).then(() => window.location.reload())}>Retry</button></span>

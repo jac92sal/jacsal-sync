@@ -88,15 +88,16 @@ export function ApsViewer({ urn, getToken, onSelectHandles, onReady }: {
                   viewer.select(ids); viewer.fitToView(ids)
                 })
               },
+              // Show only this floor plan: isolate its entities (everything else on the sheet set is hidden) and frame it.
               fitHandles: (handles) => {
                 viewer.model.getExternalIdMapping((map: Record<string, number>) => {
                   const want = new Set(handles.map((h) => h.toUpperCase()))
                   const ids = Object.entries(map).filter(([ext]) => want.has(ext.toUpperCase())).map(([, id]) => id)
                   viewer.clearSelection()
-                  if (ids.length) viewer.fitToView(ids); else viewer.fitToView()
+                  if (ids.length) { viewer.isolate(ids); viewer.fitToView(ids) } else { viewer.showAll(); viewer.fitToView() }
                 })
               },
-              fitAll: () => viewer.fitToView(),
+              fitAll: () => { viewer.showAll(); viewer.fitToView() },
             })
           })
         }, (code: number, msg: string) => { setStatus('error'); setMessage(`Viewer could not load the drawing (${code}): ${msg}`) })
