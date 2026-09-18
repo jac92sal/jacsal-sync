@@ -1,0 +1,22 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // CAD capability: DXF parsing + object detection in-Worker, DWG conversion and
+  // approved write-back through Autodesk Platform Services Design Automation
+  // (AutoCAD engine). Consumed over a Service Binding as CadService.
+  "name": "jacsal-sync-cad",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "upload_source_maps": true,
+  "secrets_store_secrets": [
+    { "binding": "APS_CLIENT_ID",     "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APS_CLIENT_ID" },
+    { "binding": "APS_CLIENT_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APS_CLIENT_SECRET" }
+  ],
+  "vars": {
+    "APS_ENGINE": "Autodesk.AutoCAD+25_1",
+    "APS_ACTIVITY": "RunScript",
+    "APS_ALIAS": "prod",
+    "APS_REGION": "US"
+  }
+}

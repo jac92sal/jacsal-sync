@@ -1,0 +1,12 @@
+{
+  "name": "jacsal-sync-cad",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "cf-typegen": "wrangler types",
+    "deploy": "wrangler deploy"
+  }
+}

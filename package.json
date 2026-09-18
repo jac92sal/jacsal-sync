@@ -1,0 +1,42 @@
+{
+  "name": "jacsal-sync",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "npm run build && vite preview",
+    "lint": "oxlint",
+    "check": "tsc -b && npm run check --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "cf-typegen": "wrangler types && npm run cf-typegen --workspaces --if-present",
+    "db:migrate": "wrangler d1 migrations apply jacsal-sync-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply jacsal-sync-db --local",
+    "deploy:services": "node -e \"require('fs').rmSync('.wrangler/deploy',{recursive:true,force:true})\" && npm run deploy -w jacsal-sync-calc && npm run deploy -w jacsal-sync-cad && npm run deploy -w jacsal-sync-gis",
+    "deploy": "npm run deploy:services && vite build && wrangler deploy"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.9.1",
+    "lucide-react": "^0.544.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.55.0",
+    "@types/node": "^24.13.5",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "wrangler": "^4.134.0",
+    "tailwindcss": "^4.1.13",
+    "@tailwindcss/vite": "^4.1.13",
+    "vitest": "^3.2.4"
+  },
+  "workspaces": [
+    "services/*"
+  ]
+}

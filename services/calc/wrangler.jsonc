@@ -1,0 +1,12 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // Calculation engine. One file per calculation under src/modules; each is
+  // registered by id and exposed through CalcService.run(). Editing one module
+  // never touches another. Consumed over a Service Binding — never public HTTP.
+  "name": "jacsal-sync-calc",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "upload_source_maps": true
+}

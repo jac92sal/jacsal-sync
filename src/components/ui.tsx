@@ -1,0 +1,10 @@
+import type { ReactNode } from 'react'
+export const Card = ({ title, right, children, className = '' }: { title?: ReactNode; right?: ReactNode; children: ReactNode; className?: string }) => (
+  <div className={`card flex flex-col min-h-0 ${className}`}>{title && <div className="card-h"><span>{title}</span>{right}</div>}<div className="flex-1 min-h-0 overflow-auto">{children}</div></div>
+)
+const tone: Record<string, string> = { PASS: 'bg-green-100 text-green-800', READY: 'bg-green-100 text-green-800', MATCH: 'bg-green-100 text-green-800', RECONCILED: 'bg-green-100 text-green-800', SUCCESS: 'bg-green-100 text-green-800', APPROVED: 'bg-green-100 text-green-800', VERIFIED: 'bg-green-100 text-green-800', CALCULATED: 'bg-blue-100 text-blue-800', PARSED: 'bg-green-100 text-green-800', CONFIRM: 'bg-green-100 text-green-800', EDIT: 'bg-blue-100 text-blue-800',
+  FAIL: 'bg-red-100 text-red-800', FAILED: 'bg-red-100 text-red-800', MISMATCH: 'bg-red-100 text-red-800', REJECTED: 'bg-red-100 text-red-800', ERROR: 'bg-red-100 text-red-800', CRITICAL: 'bg-red-100 text-red-800',
+  REVIEW: 'bg-amber-100 text-amber-800', ATTENTION: 'bg-amber-100 text-amber-800', PENDING: 'bg-gray-200 text-gray-700', INCOMPLETE: 'bg-gray-200 text-gray-700', PROPOSED: 'bg-gray-200 text-gray-700', APPLIED: 'bg-blue-100 text-blue-800', INFO: 'bg-blue-100 text-blue-800', IGNORE: 'bg-gray-200 text-gray-500', CONVERTING: 'bg-amber-100 text-amber-800', INPROGRESS: 'bg-amber-100 text-amber-800' }
+export const Pill = ({ v }: { v: string | null | undefined }) => <span className={`pill ${tone[(v ?? '').split(' ')[0]] ?? 'bg-gray-200 text-gray-700'}`}>{v ?? '—'}</span>
+export const Empty = ({ children }: { children: ReactNode }) => <div className="p-6 text-sm text-muted text-center">{children}</div>
+export const Field = ({ label, children }: { label: string; children: ReactNode }) => <label className="block text-xs uppercase tracking-wide text-muted font-bold mb-3">{label}<div className="mt-1 normal-case tracking-normal font-normal text-ink">{children}</div></label>

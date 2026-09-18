@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // One Worker per subdomain: this Worker owns sync.jacsalservices.com and nothing else.
+  "name": "jacsal-sync",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [{ "pattern": "sync.jacsalservices.com", "custom_domain": true }],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "upload_source_maps": true,
+
+  // Static SPA. Asset hits never invoke the Worker; everything under /api/* always does.
+  "assets": { "not_found_handling": "single-page-application", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+
+  "d1_databases": [{ "binding": "DB", "database_name": "jacsal-sync-db", "database_id": "97ed047b-673f-49dd-bae3-0dcf9086cba4", "migrations_dir": "migrations" }],
+  // Raw DWG/DXF uploads and every written-back revision. Private; streamed through /api/files/:id/download.
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "jacsal-sync-files" }],
+
+  // Shared capabilities over Service Bindings (typed RPC), never public HTTP.
+  "services": [
+    { "binding": "AUTH", "service": "jacsal-auth", "entrypoint": "AuthService" },
+    { "binding": "CALC", "service": "jacsal-sync-calc", "entrypoint": "CalcService" },
+    { "binding": "CAD",  "service": "jacsal-sync-cad",  "entrypoint": "CadService" },
+    { "binding": "GIS",  "service": "jacsal-sync-gis",  "entrypoint": "GisService" }
+  ],
+  "secrets_store_secrets": [
+    { "binding": "SYNC_CALLBACK_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "SYNC_CALLBACK_SECRET" }
+  ],
+  // Poll Design Automation jobs whose onComplete callback was missed.
+  "triggers": { "crons": ["*/2 * * * *"] },
+  "vars": { "PUBLIC_BASE_URL": "https://sync.jacsalservices.com" }
+}

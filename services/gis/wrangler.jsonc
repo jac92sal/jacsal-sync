@@ -1,0 +1,16 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // Shared GIS capability: ArcGIS elevation, static maps, and public ArcGIS layer
+  // queries (DC soil / zoning / parcels). Consumed over a Service Binding as
+  // GisService — never over public HTTP. Reusable by jacsal-intake later.
+  "name": "jacsal-sync-gis",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "upload_source_maps": true,
+  "secrets_store_secrets": [
+    { "binding": "ARCGIS_CLIENT_ID",     "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "ARCGIS_CLIENT_ID" },
+    { "binding": "ARCGIS_CLIENT_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "ARCGIS_CLIENT_SECRET" }
+  ]
+}
