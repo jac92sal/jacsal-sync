@@ -86,7 +86,7 @@ export function findModels(doc: DxfDocument): ModelRegion[] {
   })
   // 4. Keep floor plans only: at least two short room names and real wall geometry. Schedules and fixture
   //    lists also mention "Kitchen" or "Shower" but have long product-style labels and no walls.
-  const keep = models.filter((m) => m.labels.filter((l) => l.split(' ').length <= 2).length >= 2 && (m.wallCount >= 2 || m.entityCount >= 200))
+  const keep = models.filter((m) => m.labels.filter((l) => l.split(' ').length <= 2 && l.length <= 14).length >= 2 && m.wallCount >= 2)
   const remap = new Map(keep.map((m, i) => [m.ix, i]))
   doc.entities.forEach((e) => { if (e.model !== undefined) e.model = remap.get(e.model) })
   keep.forEach((m, i) => { m.ix = i })

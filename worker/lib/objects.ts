@@ -89,9 +89,11 @@ export async function confirmCandidate(db: D1Database, cand: CandidateRow, actor
   const props: Record<string, unknown> = {}
   if (cand.kind === 'WINDOW' || cand.kind === 'DOOR') Object.assign(props, { block: v.block, rotation: v.rotation, attribs: v.attribs })
   const existing = cand.semantic_tag ? await findByTag(db, cand.project_id, cand.semantic_tag) : null
+  // The floor-plan unit this element sits on (rooms and free walls hang off it; hosted elements follow their host).
+  const plan = await planContaining(db, cand.project_id, geometry)
   const obj = existing ?? (await createObject(db, cand.project_id, {
     type: cand.kind, humanName: cand.human_name, semanticTag: cand.semantic_tag ?? `${cand.kind}.${cand.id.slice(0, 8).toUpperCase()}`,
-    parentId: cand.kind === 'WALL' ? hostId : cand.kind === 'WINDOW' || cand.kind === 'DOOR' ? (hostId ? (await getObject(db, hostId)).parentId : null) : null,
+    parentId: cand.kind === 'WALL' ? (hostId ?? plan) : cand.kind === 'WINDOW' || cand.kind === 'DOOR' ? (hostId ? (await getObject(db, hostId)).parentId : plan) : plan,
     hostId: cand.kind === 'WALL' ? null : hostId, anchorRule: cand.anchor_rule, anchorParams: parseJson(cand.anchor_params, {}), geometry, geometrySource: `CAD:${cand.id}`, properties: props,
   }))
   // Representations: every drawing entity that shows this object.
@@ -121,5 +123,19 @@ export function anchorEnd(g: Geometry, rule: string | null): 'start' | 'end' | n
   if (rule === 'KEEP_OFFSET_FROM_NORTH_END') return y1 <= y2 ? 'end' : 'start'
   if (rule === 'KEEP_OFFSET_FROM_WEST_END') return x1 <= x2 ? 'start' : 'end'
   if (rule === 'KEEP_OFFSET_FROM_EAST_END') return x1 <= x2 ? 'end' : 'start'
+  return null
+}
+
+/** Id of the FLOOR_PLAN object whose extent contains the geometry (all points), or null. */
+async function planContaining(db: D1Database, projectId: string, g: Geometry): Promise<string | null> {
+  const pts: { x: number; y: number }[] = g.points ? g.points : g.x1 !== undefined ? [{ x: g.x1, y: g.y1! }, { x: g.x2!, y: g.y2! }] : g.x !== undefined ? [{ x: g.x, y: g.y! }] : []
+  if (!pts.length) return null
+  const plans = await all<{ id: string; geometry: string }>(db, `SELECT id, geometry FROM objects WHERE project_id = ? AND type = 'FLOOR_PLAN'`, projectId)
+  for (const p of plans) {
+    const box = (JSON.parse(p.geometry) as Geometry).points ?? []
+    if (box.length < 4) continue
+    const minX = Math.min(...box.map((q) => q.x)) - 1, maxX = Math.max(...box.map((q) => q.x)) + 1, minY = Math.min(...box.map((q) => q.y)) - 1, maxY = Math.max(...box.map((q) => q.y)) + 1
+    if (pts.every((q) => q.x >= minX && q.x <= maxX && q.y >= minY && q.y <= maxY)) return p.id
+  }
   return null
 }

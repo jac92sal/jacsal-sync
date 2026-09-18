@@ -300,7 +300,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     if (seg[2] === 'entities' && method === 'GET') {
       const model = url.searchParams.get('model')
       const rows = model !== null
-        ? await all(db, 'SELECT handle, layer, etype, model_ix, geometry, attributes FROM cad_entities WHERE file_id = ? AND model_ix = ? LIMIT 12000', file.id, Number(model))
+        ? await all(db, 'SELECT handle, layer, etype, model_ix, geometry, attributes FROM cad_entities WHERE file_id = ? AND model_ix = ? LIMIT 20000', file.id, Number(model))
         : await all(db, 'SELECT handle, layer, etype, model_ix, geometry, attributes FROM cad_entities WHERE file_id = ? LIMIT 5000', file.id)
       return ok({ file, entities: rows.map((e) => ({ ...e, geometry: JSON.parse(e.geometry as string), attributes: JSON.parse(e.attributes as string) })) })
     }

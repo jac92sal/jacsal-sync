@@ -29,7 +29,7 @@ export interface Impact { id: string; target_kind: 'OBJECT' | 'CALC' | 'REPRESEN
 export interface Change { id: string; project_id: string; object_id: string; property: string; current_value: unknown; proposed_value: unknown; reason: string | null; status: string; engineer_approval: string; drafter_approval: string; reconciliation: string | null; created_at: string; impacts: Impact[]; jobs: { id: string; kind: string; status: string; error: string | null }[]; object_name?: string; impact_count?: number }
 export interface GateRow { domain: string; functionState: string; verificationState: string; designSync: string; approval: string; gate: string; location: string }
 export interface CadFile { id: string; filename: string; kind: string; status: string; revision: number; entity_count: number | null; error: string | null; created_at: string; models?: string | null; insunits?: number | null }
-export interface ModelRegion { ix: number; title: string; labels: string[]; bbox: { minX: number; minY: number; maxX: number; maxY: number }; entityCount: number; wallCount: number }
+export interface ModelRegion { ix: number; title: string; labels: string[]; bbox: { minX: number; minY: number; maxX: number; maxY: number }; entityCount: number; wallCount: number; objectId?: string | null }
 export interface CadEntity { handle: string; layer: string; etype: string; model_ix: number | null; geometry: { points: { x: number; y: number }[]; closed?: boolean; rotation?: number; height?: number }; attributes: { text?: string; blockName?: string } }
 export const unitsToFeet = (insunits: number | null | undefined) => ({ 1: 1 / 12, 2: 1, 3: 1 / 63360, 4: 1 / 304.8, 5: 1 / 30.48, 6: 1 / 0.3048 } as Record<number, number>)[insunits ?? 0] ?? 1 / 12
 

@@ -2,7 +2,9 @@
 import { all, insertStmt, one, run, updateStmt } from './db'
 import { badRequest, notFound, parseJson, sha256Hex, uuid } from './http'
 import type { CadService, Candidate, WriteOp } from '../../services/cad/src/index'
-import { near } from './objects'
+import { createObject, findByTag, near, patchObject } from './objects'
+
+const unitsToFeet = (insunits: number): number => ({ 1: 1 / 12, 2: 1, 3: 1 / 63360, 4: 1 / 304.8, 5: 1 / 30.48, 6: 1 / 0.3048 } as Record<number, number>)[insunits] ?? 1 / 12
 
 type Cad = Pick<CadService, 'analyzeR2' | 'submitJob' | 'jobStatus' | 'fetchOutputsToR2' | 'patchDxf' | 'report' | 'previewScript'>
 
@@ -44,8 +46,20 @@ export async function ingestDxf(db: D1Database, cad: Cad, projectId: string, fil
   await run(db, `DELETE FROM candidates WHERE file_id = ? AND action = 'PENDING'`, fileId)
   for (let i = 0; i < entityStmts.length; i += 200) await db.batch(entityStmts.slice(i, i + 200))
   for (let i = 0; i < candStmts.length; i += 200) await db.batch(candStmts.slice(i, i + 200))
-  await updateStmt(db, 'cad_files', fileId, { status: 'PARSED', dxf_r2_key: dxfKey, entity_count: entityCount, error: null, models: JSON.stringify(doc.models ?? []), insunits: doc.insunits }).run()
-  return { entities: entityCount, retained: doc.entities.length, candidates: candStmts.length, insunits: doc.insunits, models: doc.models ?? [], stats: doc.stats ?? null }
+  // Each model page is brought in as one unit: a FLOOR_PLAN object the person names, keeps or discards, then breaks down.
+  const k = unitsToFeet(doc.insunits)
+  const models = (doc.models ?? []).map((m) => ({ ...m, objectId: null as string | null }))
+  const level = await one<{ id: string }>(db, `SELECT id FROM objects WHERE project_id = ? AND type = 'LEVEL' ORDER BY created_at LIMIT 1`, projectId)
+  for (const m of models) {
+    const tag = `PLAN.${fileId.slice(0, 8).toUpperCase()}.${String(m.ix + 1).padStart(2, '0')}`
+    const geometry = { points: [{ x: m.bbox.minX * k, y: m.bbox.minY * k }, { x: m.bbox.maxX * k, y: m.bbox.minY * k }, { x: m.bbox.maxX * k, y: m.bbox.maxY * k }, { x: m.bbox.minX * k, y: m.bbox.maxY * k }] }
+    const props = { fileId, modelIx: m.ix, labels: m.labels, entityCount: m.entityCount, wallCount: m.wallCount }
+    const existing = await findByTag(db, projectId, tag)
+    if (existing) { await patchObject(db, existing.id, { geometry, geometrySource: `CAD:${fileId}`, properties: props }); m.objectId = existing.id }
+    else m.objectId = (await createObject(db, projectId, { type: 'FLOOR_PLAN', humanName: m.title.replace(/^Model \d+: /, 'Floor plan: '), semanticTag: tag, parentId: level?.id ?? null, geometry, geometrySource: `CAD:${fileId}`, properties: { ...props, use: true } })).id
+  }
+  await updateStmt(db, 'cad_files', fileId, { status: 'PARSED', dxf_r2_key: dxfKey, entity_count: entityCount, error: null, models: JSON.stringify(models), insunits: doc.insunits }).run()
+  return { entities: entityCount, retained: doc.entities.length, candidates: candStmts.length, insunits: doc.insunits, models, stats: doc.stats ?? null }
 }
 
 export async function submitJob(db: D1Database, cad: Cad, projectId: string, fileId: string, changeId: string | null, kind: 'CONVERT' | 'WRITEBACK' | 'RESCAN', inputR2Key: string, ops: WriteOp[], callbackBase: string) {
