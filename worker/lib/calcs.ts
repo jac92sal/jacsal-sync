@@ -18,6 +18,18 @@ export async function assembleInputs(db: D1Database, projectId: string, objectId
   if (objectId) {
     const o = await getObject(db, objectId)
     for (const [k, v] of Object.entries(DERIVED_MAP[o.type] ?? {})) if (o.derived[k] !== undefined) inputs[v] = o.derived[k]
+    // A member with no line geometry (e.g. a beam known only by its mark) gets its span from its supports:
+    // Beam B4 SUPPORTED_BY PB.WEST_WALL and PB.EAST_WALL → span = distance between the support lines.
+    if ((o.type === 'BEAM' || o.type === 'HEADER') && inputs.span_ft === undefined) {
+      const supports = await all<{ to_id: string }>(db, `SELECT to_id FROM object_relations WHERE from_id = ? AND kind = 'SUPPORTED_BY'`, o.id)
+      const segs = (await Promise.all(supports.map((s) => getObject(db, s.to_id)))).map((w) => w.geometry).filter((g) => g.x1 !== undefined)
+      if (segs.length >= 2) {
+        const mid = (g: typeof segs[number]) => ({ x: (g.x1! + g.x2!) / 2, y: (g.y1! + g.y2!) / 2 })
+        const a = mid(segs[0]), b = mid(segs[1])
+        inputs.span_ft = Math.round(Math.hypot(a.x - b.x, a.y - b.y) * 1e4) / 1e4
+        inputs.span_source = `supports: ${supports.map((s) => s.to_id).join(', ')}`
+      }
+    }
     Object.assign(inputs, o.properties)
     inputs.member_mark ??= o.humanName; inputs.mark ??= o.humanName
   }
