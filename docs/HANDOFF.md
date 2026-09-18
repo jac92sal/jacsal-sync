@@ -3,27 +3,25 @@
 **Live:** https://sync.jacsalservices.com — sign in with your work email (code arrives from login@jacsalservices.com).
 
 ## What to try (10 minutes)
-1. **Projects → New project.** Name it, add the address and (optionally) lat/lng.
-2. **Dashboard → Upload DWG / DXF.** A DXF parses instantly. A DWG is sent to Autodesk Design Automation
-   (AutoCAD engine) which exports a DXF; press **Check** on the file row or wait for the 2-minute poller.
-3. **00_CAD_CONFIRM.** Rooms (closed polylines with a text label inside), their four walls, windows/doors
-   (block names containing WIN/WINDOW/DOOR), dimensions attached to wall ends, beam marks (B1, HDR-2…),
-   and building extents are proposed. Confirm / edit / ignore, or **Confirm all ≥ 60%**.
-4. **00_OBJECT_MODEL.** Click the east wall → inspector → *Propose a length change* (e.g. 15.5, "end moves") → **Analyze impact**.
-5. **00_CHANGE_IMPACT.** Structural (critical) / Design (attention) / Documentation (exact write ops) are listed.
-   Tick the ones you accept → **Approve selected changes** → **Apply approved revisions**.
-   - DXF source: the DXF is patched in place, re-scanned and reconciled immediately.
-   - DWG source: an AutoCAD script (inline AutoLISP `entmod` on the exact entity handles, then `SAVEAS` + `DXFOUT`)
-     runs on Design Automation; press **Reconcile drawings** or wait for the poller. **Preview AutoCAD script** shows exactly what will run.
-   - Download the revised DWG/DXF from the Dashboard file row.
-6. **CALCULATIONS.** Pick 20_WOOD_BEAM and Beam B4; type Fb/Fv/E etc. once and **Save typed values to project** so they persist in 01_INPUTS.
-7. **00_ISSUE_GATE.** Watch domains move from PENDING → REVIEW as calcs run and changes reconcile.
+1. Sign in at https://sync.jacsalservices.com (email code). Create a project: name, street address, and city/state or ZIP.
+   The address is verified (US Census geocoder) and jurisdiction, county, coordinates, and code path fill in.
+2. Dashboard → Upload DWG. The file goes to Autodesk Design Automation (AutoCAD Core Console) for DXF conversion;
+   the page polls progress. A 10 MB architectural set takes about a minute to convert and 15 s to parse.
+   At the same time the DWG is translated by Autodesk Model Derivative for the viewer (first time 1–3 minutes).
+3. **01_MODEL_REVIEW** (step one). Every floor plan found in the sheet set is listed as a unit. Name the three real
+   ones, mark the others "Not a plan", then *Open and break down*. The drawing shown is AutoCAD's own rendering
+   (Autodesk Viewer). Click an entity or use *Next*; say what it is, type the label, *Confirm and next*. Labels
+   become the object names and tags. Elevations, sections, and schedules are not read; they are generated later.
+4. 00_OBJECT_MODEL shows what you built (plan units → walls / rooms / openings). 00_CHANGE_IMPACT → propose a
+   wall length change → approve → apply → write-back (DWG via Design Automation, DXF patched locally).
+5. Settings (top right of Projects): ArcGIS key status and creation form; test elevation call.
 
 ## Where the real drawing needs to look
-- Room boundaries: closed **LWPOLYLINE**; room name as **TEXT/MTEXT inside** the polygon.
-- Wall lines on a layer containing **WALL**; openings as **INSERT** blocks named with WIN / WINDOW / DOOR.
-- Linear **DIMENSION** entities whose definition points sit on wall ends get linked as "length-dim" representations.
-- Units from `$INSUNITS` (inches assumed when unitless). Model geometry is stored in feet.
+- Rooms are only proposed when closed outlines exist. On PDF-derived sets (like the National City file) the walls are
+  outlines on wall layers; the detector merges the two faces into a centerline with thickness and chains collinear
+  pieces. Expect ~30–40 walls per plan. Rooms will need to be drawn or derived from confirmed walls (next step).
+- Viewer selection ↔ walk-through is bridged by AutoCAD entity handle (the viewer's externalId). If clicking an entity
+  does not pick a candidate, the handle mapping differs for that translation; check `getExternalIdMapping` output.
 
 ## Known gaps / decisions for you
 - **GitHub repo:** `jac92sal/jacsal-sync` (`main`). All work is pushed there.

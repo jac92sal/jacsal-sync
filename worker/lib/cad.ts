@@ -6,7 +6,7 @@ import { createObject, findByTag, near, patchObject } from './objects'
 
 const unitsToFeet = (insunits: number): number => ({ 1: 1 / 12, 2: 1, 3: 1 / 63360, 4: 1 / 304.8, 5: 1 / 30.48, 6: 1 / 0.3048 } as Record<number, number>)[insunits] ?? 1 / 12
 
-type Cad = Pick<CadService, 'analyzeR2' | 'submitJob' | 'jobStatus' | 'fetchOutputsToR2' | 'patchDxf' | 'report' | 'previewScript'>
+type Cad = Pick<CadService, 'analyzeR2' | 'submitJob' | 'jobStatus' | 'fetchOutputsToR2' | 'patchDxf' | 'report' | 'previewScript' | 'ensureViewable'>
 
 export interface FileRow extends Record<string, unknown> { id: string; project_id: string; filename: string; kind: string; r2_key: string; dxf_r2_key: string | null; status: string; revision: number; entity_count: number | null; error: string | null; viewer_urn?: string | null; viewer_status?: string | null }
 
@@ -68,6 +68,10 @@ export async function submitJob(db: D1Database, cad: Cad, projectId: string, fil
   try {
     const r = await cad.submitJob(kind, id, inputR2Key, ops, `${callbackBase}/api/cad/callback/${id}`)
     await updateStmt(db, 'cad_jobs', id, { status: 'PENDING', workitem_id: r.workitemId, input_key: r.keys.input, script_key: r.keys.script, output_key: JSON.stringify({ bucketKey: r.bucketKey, keys: r.keys, uploadKeys: r.uploadKeys }) }).run()
+    // Start the Autodesk Viewer translation of the uploaded DWG right away so the review page opens without a wait.
+    if (kind === 'CONVERT') {
+      try { const v = await cad.ensureViewable(r.bucketKey, r.keys.input); await updateStmt(db, 'cad_files', fileId, { viewer_urn: v.urn, viewer_status: v.status }).run() } catch (e) { console.error(JSON.stringify({ level: 'warn', msg: 'viewer translation start failed', file: fileId, err: String(e) })) }
+    }
   } catch (err) {
     await updateStmt(db, 'cad_jobs', id, { status: 'FAILED', error: String(err instanceof Error ? err.message : err) }).run()
     throw err
@@ -105,6 +109,8 @@ export async function processJob(db: D1Database, _bucket: R2Bucket, cad: Cad, jo
     const dxfKey = dwgKey.replace(/\.dwg$/i, '.dxf')
     const got = await cad.fetchOutputsToR2(meta.bucketKey, meta.keys, meta.uploadKeys, { result: dwgKey, dxf: dxfKey })
     await updateStmt(db, 'cad_files', file.id, { r2_key: got.result ? dwgKey : file.r2_key, dxf_r2_key: dxfKey, revision: rev }).run()
+    // The written-back DWG is the new truth: translate it for the viewer.
+    if (got.result) { try { const v = await cad.ensureViewable(meta.bucketKey, meta.keys.result); await updateStmt(db, 'cad_files', file.id, { viewer_urn: v.urn, viewer_status: v.status }).run() } catch { /* viewer refresh is best effort */ } }
     await reconcile(db, cad, projectId, file.id, job.change_id as string | null, dxfKey)
   }
   await updateStmt(db, 'cad_jobs', jobId, { status: 'SUCCESS', report_url: st.reportUrl ?? null }).run()
