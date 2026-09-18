@@ -54,21 +54,24 @@ export function ApsViewer({ urn, getToken, onSelectHandles, onReady }: {
         await loadViewerLibrary()
         if (cancelled || !host.current) return
         const AV = window.Autodesk.Viewing
+        // Exactly as in autodesk-platform-services/aps-simple-viewer-nodejs (wwwroot/viewer.js): initViewer()
         await new Promise<void>((resolve) => AV.Initializer({
-          env: 'AutodeskProduction2', api: 'streamingV2',
+          env: 'AutodeskProduction',
           getAccessToken: (cb: (t: string, e: number) => void) => { getToken().then((t) => cb(t.access_token, t.expires_in)).catch(() => cb('', 0)) },
         }, resolve))
         if (cancelled || !host.current) return
-        viewer = new AV.GuiViewer3D(host.current, { extensions: ['Autodesk.DocumentBrowser'] })
+        const config = { extensions: ['Autodesk.DocumentBrowser'] }
+        viewer = new AV.GuiViewer3D(host.current, config)
         viewer.start()
         viewer.setTheme('light-theme')
         viewerRef.current = viewer
+        // loadModel(viewer, urn) from the sample; the only difference is preferring the "Model" (model space)
+        // view of a DWG over the first paper-space layout, falling back to the sample's getDefaultGeometry().
         AV.Document.load(`urn:${urn}`, (doc: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-          // A DWG translates to 2D sheets: prefer the model-space view, else whatever is the default.
           const root = doc.getRoot()
-          const sheets = root.search({ type: 'geometry', role: '2d' })
-          const modelSpace = sheets.find((n: any) => /^model$/i.test(n.name?.() ?? n.data?.name ?? '')) // eslint-disable-line @typescript-eslint/no-explicit-any
-          const node = modelSpace ?? sheets[0] ?? root.getDefaultGeometry()
+          const sheets: any[] = root.search({ type: 'geometry', role: '2d' }) // eslint-disable-line @typescript-eslint/no-explicit-any
+          const modelSpace = sheets.find((n) => /^model$/i.test(typeof n.name === 'function' ? n.name() : n.data?.name ?? ''))
+          const node = modelSpace ?? root.getDefaultGeometry()
           viewer.loadDocumentNode(doc, node).then(() => {
             setStatus('ready')
             viewer.addEventListener(AV.SELECTION_CHANGED_EVENT, () => {
@@ -100,7 +103,7 @@ export function ApsViewer({ urn, getToken, onSelectHandles, onReady }: {
               fitAll: () => { viewer.showAll(); viewer.fitToView() },
             })
           })
-        }, (code: number, msg: string) => { setStatus('error'); setMessage(`Viewer could not load the drawing (${code}): ${msg}`) })
+        }, (code: number, msg: string) => { setStatus('error'); setMessage(`Could not load model. See console for more details. (${code}: ${msg})`) })
       } catch (e) { if (!cancelled) { setStatus('error'); setMessage((e as Error).message) } }
     })()
     return () => { cancelled = true; if (viewer) { try { viewer.finish() } catch { /* already gone */ } } viewerRef.current = null }

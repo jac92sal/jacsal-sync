@@ -96,16 +96,21 @@ export function detect(doc: DxfDocument): Candidate[] {
   // Walls straight from wall layers. PDF-derived sets and ArchiCAD/Revit exports draw walls as outlines on a wall
   // layer without closed room polygons, so room-edge walls above find nothing; each outline segment becomes a wall,
   // named by the nearest room label (within 30 ft) so the drafter recognises it.
+  // Centre of each model page (or of the whole drawing), so walls and openings can be named by compass side.
+  const centers = new Map<number, { cx: number; cy: number; n: number }>()
+  for (const e of doc.entities) { const key = e.model ?? -1; const p = e.points[0]; if (!p) continue; const c = centers.get(key) ?? { cx: 0, cy: 0, n: 0 }; c.cx += p.x; c.cy += p.y; c.n++; centers.set(key, c) }
+  const centerOf = (model: number | undefined) => { const c = centers.get(model ?? -1) ?? centers.get(-1); return c && c.n ? { cx: c.cx / c.n, cy: c.cy / c.n } : { cx: 0, cy: 0 } }
+  const compass = (mx: number, my: number, horiz: boolean, model: number | undefined) => { const c = centerOf(model); return horiz ? (my >= c.cy ? 'North' : 'South') : (mx >= c.cx ? 'East' : 'West') }
   const covered = new Set(out.filter((c) => c.kind === 'WALL').flatMap((c) => c.sourceHandles))
   // Collect every wall-layer segment, then merge the two faces of an outlined wall into one centerline.
-  type Seg = { a: Pt; b: Pt; handle: string; i: number; layer: string; used: boolean }
+  type Seg = { a: Pt; b: Pt; handle: string; i: number; layer: string; used: boolean; model?: number }
   const segsAll: Seg[] = []
   for (const e of doc.entities) {
     if ((e.type !== 'LWPOLYLINE' && e.type !== 'LINE') || !isWallLayer(e.layer) || covered.has(e.handle)) continue
     const pts = e.points; const n = e.type === 'LINE' ? 1 : e.closed ? pts.length : pts.length - 1
-    for (let i = 0; i < n; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; if (dist(a, b) * k >= 1) segsAll.push({ a, b, handle: e.handle, i, layer: e.layer, used: false }) }
+    for (let i = 0; i < n; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; if (dist(a, b) * k >= 1) segsAll.push({ a, b, handle: e.handle, i, layer: e.layer, used: false, model: e.model }) }
   }
-  const merged: { a: Pt; b: Pt; handles: string[]; roles: string[]; layer: string; thickness: number }[] = []
+  const merged: { a: Pt; b: Pt; handles: string[]; roles: string[]; layer: string; thickness: number; model?: number }[] = []
   for (let p = 0; p < segsAll.length; p++) {
     const s1 = segsAll[p]; if (s1.used) continue
     const d1 = { x: s1.b.x - s1.a.x, y: s1.b.y - s1.a.y }; const L1 = Math.hypot(d1.x, d1.y); const u = { x: d1.x / L1, y: d1.y / L1 }
@@ -129,9 +134,9 @@ export function detect(doc: DxfDocument): Candidate[] {
       const t0 = Math.min(...ts), t1 = Math.max(...ts)
       const nrm = { x: -u.y, y: u.x }; const side = Math.sign((mate.a.x - s1.a.x) * nrm.x + (mate.a.y - s1.a.y) * nrm.y) || 1
       const shift = (mateOff / k / 2) * side
-      merged.push({ a: { x: s1.a.x + u.x * t0 + nrm.x * shift, y: s1.a.y + u.y * t0 + nrm.y * shift }, b: { x: s1.a.x + u.x * t1 + nrm.x * shift, y: s1.a.y + u.y * t1 + nrm.y * shift }, handles: [...new Set([s1.handle, mate.handle])], roles: [`wall-edge-${s1.i}`, `wall-edge-${mate.i}`], layer: s1.layer, thickness: mateOff })
+      merged.push({ a: { x: s1.a.x + u.x * t0 + nrm.x * shift, y: s1.a.y + u.y * t0 + nrm.y * shift }, b: { x: s1.a.x + u.x * t1 + nrm.x * shift, y: s1.a.y + u.y * t1 + nrm.y * shift }, handles: [...new Set([s1.handle, mate.handle])], roles: [`wall-edge-${s1.i}`, `wall-edge-${mate.i}`], layer: s1.layer, thickness: mateOff, model: s1.model })
     } else if (L1 * k >= 3) {
-      merged.push({ a: s1.a, b: s1.b, handles: [s1.handle], roles: [`wall-edge-${s1.i}`], layer: s1.layer, thickness: 0 })
+      merged.push({ a: s1.a, b: s1.b, handles: [s1.handle], roles: [`wall-edge-${s1.i}`], layer: s1.layer, thickness: 0, model: s1.model })
     }
   }
   // Chain collinear pieces (split at openings, intersections, or PDF line breaks) into whole wall runs.
@@ -150,7 +155,7 @@ export function detect(doc: DxfDocument): Candidate[] {
       const gap = Math.max(tb[0] - La, 0 - tb[1], 0)
       if (gap * k > 0.75) continue                                                                 // not touching
       const t0 = Math.min(...ts), t1 = Math.max(...ts)
-      merged[i] = { a: { x: A.a.x + u.x * t0, y: A.a.y + u.y * t0 }, b: { x: A.a.x + u.x * t1, y: A.a.y + u.y * t1 }, handles: [...new Set([...A.handles, ...B.handles])], roles: [...A.roles, ...B.roles], layer: A.layer, thickness: A.thickness || B.thickness }
+      merged[i] = { a: { x: A.a.x + u.x * t0, y: A.a.y + u.y * t0 }, b: { x: A.a.x + u.x * t1, y: A.a.y + u.y * t1 }, handles: [...new Set([...A.handles, ...B.handles])], roles: [...A.roles, ...B.roles], layer: A.layer, thickness: A.thickness || B.thickness, model: A.model ?? B.model }
       merged.splice(j, 1); changed = true; break
     }
   }
@@ -165,12 +170,13 @@ export function detect(doc: DxfDocument): Candidate[] {
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
       let near: { t: DxfEntity; d: number } | null = null
       for (const { t } of roomTexts) { const d = dist(t.points[0], { x: mx, y: my }) * k; if (d < 30 && (!near || d < near.d)) near = { t, d } }
-      const nm = near ? titleCase(near.t.text!.replace(/\s+/g, ' ').trim()) : 'Bearing'
+      const nm = near ? titleCase(near.t.text!.replace(/\s+/g, ' ').trim()) : ''
       const horiz = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y)
-      const orient = horiz ? 'EW' : 'NS'
+      const side = compass(mx, my, horiz, m.model)
+      const orient = side.toUpperCase()
       const num = String(++wn).padStart(2, '0')
       void i
-      out.push({ key: `WALL:${m.handles.join('+')}:${m.roles.join('+')}`, kind: 'WALL', humanName: `${nm} Wall ${orient} ${num}`, semanticTag: `WALL.${slug(nm)}.${orient}.${num}`,
+      out.push({ key: `WALL:${m.handles.join('+')}:${m.roles.join('+')}`, kind: 'WALL', humanName: `${nm ? `${nm} ` : ''}${side} Wall ${num}`, semanticTag: `WALL.${nm ? `${slug(nm)}.` : ''}${orient}.${num}`,
         detectedValue: { x1: a.x * k, y1: a.y * k, x2: b.x * k, y2: b.y * k, length_ft: round3(len), thickness_ft: round3(m.thickness) }, unit: 'ft', confidence: m.thickness ? (near ? 0.75 : 0.65) : near ? 0.6 : 0.5, sourceHandles: [...m.handles, ...(near ? [near.t.handle] : [])], method: `${m.thickness ? 'wall outline centerline' : 'wall-layer line'} (${e.layer})`,
         anchorRule: 'FREE', representations: m.handles.map((h, j) => ({ handle: h, repType: 'GEOMETRY', role: m.roles[j] })) })
     }
@@ -203,7 +209,8 @@ export function detect(doc: DxfDocument): Candidate[] {
       anchorParams = { offset_ft: Math.round(offset * 1000) / 1000 }
     }
     const tagBase = best ? best.wall.semanticTag : 'UNHOSTED'
-    out.push({ key: `${kind}:${e.handle}`, kind, hostKey: best?.wall.key, humanName: `${best ? best.wall.humanName.replace(/ Wall$/, '') : ''} ${kind === 'WINDOW' ? 'Window' : 'Door'} ${String(n).padStart(2, '0')}`.trim(),
+    const sideOf = best ? (/(North|South|East|West)/.exec(best.wall.humanName)?.[1] ?? '') : compass(p.x, p.y, true, e.model)
+    out.push({ key: `${kind}:${e.handle}`, kind, hostKey: best?.wall.key, humanName: `${sideOf} ${kind === 'WINDOW' ? 'Window' : 'Door'} ${String(n).padStart(2, '0')}`.trim(),
       semanticTag: `${tagBase}.${kind}.${String(n).padStart(2, '0')}`, detectedValue: { x: p.x * k, y: p.y * k, block: e.blockName, rotation: e.rotation, attribs: e.attribs ?? {} }, unit: 'ft',
       confidence: best ? 0.75 : 0.4, sourceHandles: [e.handle], method: 'block-name + nearest wall', anchorRule, anchorParams, representations: [{ handle: e.handle, repType: 'GEOMETRY', role: 'opening-block' }] })
   }

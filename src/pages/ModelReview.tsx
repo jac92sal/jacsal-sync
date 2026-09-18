@@ -48,6 +48,7 @@ export default function ModelReview() {
   const k = unitsToFeet(insunits)
   const file = files.find((f) => f.id === fileId)
   const model = models[modelIx] ?? null
+  useEffect(() => { const first = models.find((m) => planOf(m)?.properties.use !== false); if (first && planOf(models[modelIx])?.properties.use === false) { setModelIx(first.ix); setActiveId(null) } }, [plans]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { (async () => {
     const f = (await api.get<{ files: CadFile[] }>(`/projects/${ctx.project.id}/files`)).files.filter((x) => x.status === 'PARSED')
@@ -131,45 +132,40 @@ export default function ModelReview() {
 
   if (!files.length) return <Card title="01 · Model review"><div className="p-6 text-sm text-muted">No parsed drawing yet. Upload a DWG or DXF on the dashboard; conversion takes a minute or two.</div></Card>
   const usable = models.filter((m) => planOf(m)?.properties.use !== false)
-  if (!opened && models.length > 0) return (
-    <Card title="Floor plans in this drawing" right={<div className="flex items-center gap-2 text-xs">{files.length > 1 && <select className="input py-1" value={fileId} onChange={(e) => setFileId(e.target.value)}>{files.map((f) => <option key={f.id} value={f.id}>{f.filename}</option>)}</select>}<Link className="text-accent underline" to="list">table view</Link></div>}>
-      <div className="px-4 py-3 text-sm border-b border-line space-y-2">
-        <p className="text-muted">Each floor plan came in as one unit. Claude reviews what the scan found and keeps only the basic floor plans; you can override any decision, then open a plan to break it down into walls, rooms, and openings. Elevations, sections, and schedules are built from these plans later.</p>
-        <div className="flex items-center gap-3 flex-wrap">
-          <button className="btn btn-primary py-1" disabled={reviewBusy} onClick={runReview}>{reviewBusy ? 'Claude is reviewing…' : review ? 'Ask Claude to review again' : 'Ask Claude to review'}</button>
-          {review?.pages && <span className="text-xs text-muted">Reviewed {new Date(review.at).toLocaleString()} · {review.pages.filter((p) => p.keep).length} of {review.pages.length} kept · {review.model}</span>}
-          {(reviewErr || review?.error) && <span className="text-xs text-bad">Claude review failed: {reviewErr || review?.error}</span>}
-          {!review && !reviewBusy && <span className="text-xs text-bad">Not reviewed yet. The review runs automatically after conversion; run it now if it has not.</span>}
-        </div>
-        {review?.pages && <p className="text-xs">{review.summary}{review.buildings?.length ? <> Buildings: {review.buildings.join(', ')}.</> : null}</p>}
+  const [showPlans, setShowPlans] = useState(false)
+  void opened; void setOpened
+  const planStrip = (
+    <div className="px-3 pt-3 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        {usable.map((m) => <button key={m.ix} className={`btn py-1 px-3 ${m.ix === modelIx ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setModelIx(m.ix); setActiveId(null) }}>{planOf(m)?.humanName ?? m.title}</button>)}
+        {models.length > 0 && <button className="text-xs text-accent underline ml-1" onClick={() => setShowPlans(!showPlans)}>{showPlans ? 'hide' : `all ${models.length} pages`}</button>}
+        <span className="text-xs text-muted ml-auto">
+          {reviewBusy ? 'Claude is reviewing…' : review?.pages ? `Claude kept ${review.pages.filter((p) => p.keep).length} of ${review.pages.length} pages` : review?.error ? <span className="text-bad">Claude review failed: {review.error}</span> : 'Not reviewed yet'}
+          {' · '}<button className="text-accent underline" disabled={reviewBusy} onClick={runReview}>review again</button>
+        </span>
       </div>
-      <div className="p-4 grid gap-3 md:grid-cols-2">
-        {models.map((m) => { const p = planOf(m); const use = p?.properties.use !== false; const pr = pageProgress(m); return (
-          <div key={m.ix} className={`border border-line rounded p-3 text-sm ${use ? '' : 'opacity-50'}`}>
-            <div className="flex items-center justify-between gap-2">
-              <input className="input font-bold" value={p ? planName[p.id] ?? p.humanName : m.title} disabled={!p} onChange={(e) => p && setPlanName({ ...planName, [p.id]: e.target.value })} onBlur={() => p && planName[p.id] && planName[p.id] !== p.humanName && savePlan(p, { humanName: planName[p.id] })} />
-              <Pill v={use ? (pr.total && pr.done === pr.total ? 'DONE' : pr.done ? 'IN PROGRESS' : 'NEW') : 'SKIPPED'} />
+      {reviewErr && <div className="text-xs text-bad">{reviewErr}</div>}
+      {showPlans && <div className="grid gap-2 md:grid-cols-2 text-sm">
+        {models.map((m) => { const p = planOf(m); const use = p?.properties.use !== false; const a = p?.properties.agent as { kind?: string; state?: string; reason?: string; keep?: boolean } | undefined; return (
+          <div key={m.ix} className={`border border-line rounded p-2 ${use ? '' : 'opacity-60'}`}>
+            <div className="flex items-center gap-2">
+              <input className="input py-1 font-bold" value={p ? planName[p.id] ?? p.humanName : m.title} disabled={!p} onChange={(e) => p && setPlanName({ ...planName, [p.id]: e.target.value })} onBlur={() => p && planName[p.id] && planName[p.id] !== p.humanName && savePlan(p, { humanName: planName[p.id] })} />
+              {p && <button className="btn btn-ghost py-1 whitespace-nowrap" onClick={() => savePlan(p, { properties: { use: !use } })}>{use ? 'Not a plan' : 'Use as plan'}</button>}
             </div>
-            <div className="text-xs text-muted mt-1">Labels seen: {m.labels.slice(0, 8).join(', ')}{m.labels.length > 8 ? '…' : ''}</div>
-            {(() => { const a = p?.properties.agent as { kind?: string; state?: string; reason?: string; keep?: boolean } | undefined; return a ? <div className={`text-xs mt-1 ${a.keep ? 'text-ok' : 'text-muted'}`}>Claude: {a.keep ? 'keep' : 'set aside'} · {a.kind?.replace('_', ' ')}{a.state && a.state !== 'unknown' ? `, ${a.state}` : ''} · {a.reason}</div> : null })()}
-            <div className="text-xs text-muted">{m.entityCount.toLocaleString()} drawing entities · {m.wallCount} wall-layer elements · {pr.done} of {pr.total} elements reviewed</div>
-            <div className="flex gap-2 mt-2">
-              <button className="btn btn-primary py-1" disabled={!use} onClick={() => { setModelIx(m.ix); setActiveId(null); setOpened(true) }}>Open and break down</button>
-              {p && <button className="btn btn-ghost py-1" onClick={() => savePlan(p, { properties: { use: !use } })}>{use ? 'Not a plan' : 'Use as plan'}</button>}
-            </div>
+            {a && <div className={`text-xs mt-1 ${a.keep ? 'text-ok' : 'text-muted'}`}>Claude: {a.keep ? 'keep' : 'set aside'} · {a.kind?.replace('_', ' ')}{a.state && a.state !== 'unknown' ? `, ${a.state}` : ''} · {a.reason}</div>}
+            {(() => { const pr = pageProgress(m); return <div className="text-xs text-muted">{pr.done} of {pr.total} elements reviewed</div> })()}
           </div>) })}
-      </div>
-      <div className="px-4 pb-4 text-xs text-muted">{usable.length} plan{usable.length === 1 ? '' : 's'} in use.</div>
-    </Card>
+      </div>}
+    </div>
   )
   return (
     <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
       <Card title="What we see" right={<div className="flex items-center gap-2 text-xs">
         {files.length > 1 && <select className="input py-1" value={fileId} onChange={(e) => setFileId(e.target.value)}>{files.map((f) => <option key={f.id} value={f.id}>{f.filename}</option>)}</select>}
         <Link className="text-accent underline" to="list">table view</Link></div>}>
-        {models.length > 0 && <div className="flex gap-1 px-3 pt-3 flex-wrap items-center"><button className="btn btn-ghost py-1 px-3" onClick={() => setOpened(false)}>← All plans</button>{usable.map((m) => <button key={m.ix} className={`btn py-1 px-3 ${m.ix === modelIx ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setModelIx(m.ix); setActiveId(null) }}>{planOf(m)?.humanName ?? m.title}</button>)}</div>}
+        {planStrip}
         {models.length === 0 && file && <div className="px-4 pt-3 text-xs text-muted">No separate model pages were recognised in {file.filename}; showing the whole drawing.</div>}
-        <div className="p-3" style={{ height: 620 }}>
+        <div className="p-3" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>
           {viewer?.status === 'success'
             ? <ApsViewer urn={viewer.urn} getToken={getToken} onSelectHandles={onSelectHandles} onReady={(h) => { vh.current = h; if (entities.length) h.fitHandles(entities.map((e) => e.handle)) }} />
             : <div className="h-full grid place-items-center text-sm text-muted text-center px-6">
