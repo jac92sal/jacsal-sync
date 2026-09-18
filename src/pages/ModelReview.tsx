@@ -137,10 +137,11 @@ export default function ModelReview() {
         <p className="text-muted">Each floor plan came in as one unit. Claude reviews what the scan found and keeps only the basic floor plans; you can override any decision, then open a plan to break it down into walls, rooms, and openings. Elevations, sections, and schedules are built from these plans later.</p>
         <div className="flex items-center gap-3 flex-wrap">
           <button className="btn btn-primary py-1" disabled={reviewBusy} onClick={runReview}>{reviewBusy ? 'Claude is reviewing…' : review ? 'Ask Claude to review again' : 'Ask Claude to review'}</button>
-          {review && <span className="text-xs text-muted">Reviewed {new Date(review.at).toLocaleString()} · {review.pages.filter((p) => p.keep).length} of {review.pages.length} kept · {review.model}</span>}
-          {reviewErr && <span className="text-xs text-bad">{reviewErr}</span>}
+          {review?.pages && <span className="text-xs text-muted">Reviewed {new Date(review.at).toLocaleString()} · {review.pages.filter((p) => p.keep).length} of {review.pages.length} kept · {review.model}</span>}
+          {(reviewErr || review?.error) && <span className="text-xs text-bad">Claude review failed: {reviewErr || review?.error}</span>}
+          {!review && !reviewBusy && <span className="text-xs text-bad">Not reviewed yet. The review runs automatically after conversion; run it now if it has not.</span>}
         </div>
-        {review && <p className="text-xs">{review.summary}{review.buildings.length ? <> Buildings: {review.buildings.join(', ')}.</> : null}</p>}
+        {review?.pages && <p className="text-xs">{review.summary}{review.buildings?.length ? <> Buildings: {review.buildings.join(', ')}.</> : null}</p>}
       </div>
       <div className="p-4 grid gap-3 md:grid-cols-2">
         {models.map((m) => { const p = planOf(m); const use = p?.properties.use !== false; const pr = pageProgress(m); return (

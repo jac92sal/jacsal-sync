@@ -25,8 +25,11 @@
   ],
   "secrets_store_secrets": [
     { "binding": "SYNC_CALLBACK_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "SYNC_CALLBACK_SECRET" },
-    // Master key for sealed values in app_settings (the Claude API key entered in Settings). Shared with the GIS service.
-    { "binding": "APP_KEK",              "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APP_KEK" }
+    // Master key for sealed values in app_settings. Shared with the GIS service.
+    { "binding": "APP_KEK",              "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APP_KEK" },
+    // Claude review agent: the account's Anthropic keys already in the Secrets Store, tried in this order.
+    { "binding": "ANTHROPIC_API_KEY",     "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "default_anthropic_default" },
+    { "binding": "ANTHROPIC_API_KEY_ALT", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "CASE_4667_ANTHROPIC_KEY" }
   ],
   // Poll Design Automation jobs whose onComplete callback was missed.
   "triggers": { "crons": ["*/2 * * * *"] },

@@ -34,7 +34,7 @@ const Review = z.object({
   buildings: z.array(z.string()),
   pages: z.array(PageDecision),
 })
-export type AgentReview = z.infer<typeof Review> & { model: string; at: string; usage?: { input: number; output: number } }
+export type AgentReview = z.infer<typeof Review> & { model: string; at: string; usage?: { input: number; output: number }; source?: string }
 
 /** Some origins answer Workers' fetch with a synthetic 525; fall back to a raw TLS socket for those. */
 async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -49,24 +49,47 @@ async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<R
   return socketFetch(url, { method: init?.method ?? 'GET', headers, body, timeoutMs: 120_000 })
 }
 
-export async function claudeClient(env: Env): Promise<Anthropic | null> {
-  const apiKey = await getSealed(env, CLAUDE_KEY)
-  if (!apiKey) return null
-  return new Anthropic({ apiKey, fetch: apiFetch as typeof fetch, maxRetries: 1, timeout: 120_000 })
+/**
+ * Key resolution, in order: the account's Secrets Store entries bound to the Worker, then a key
+ * entered in Settings. The first key Anthropic accepts is remembered for the life of the isolate.
+ */
+type KeySource = { name: string; get: () => Promise<string | null> }
+function keySources(env: Env): KeySource[] {
+  return [
+    { name: 'Secrets Store: default_anthropic_default', get: () => env.ANTHROPIC_API_KEY.get().catch(() => null) },
+    { name: 'Secrets Store: CASE_4667_ANTHROPIC_KEY', get: () => env.ANTHROPIC_API_KEY_ALT.get().catch(() => null) },
+    { name: 'Settings (sealed)', get: () => getSealed(env, CLAUDE_KEY) },
+  ]
+}
+let workingSource: string | null = null
+const mk = (apiKey: string) => new Anthropic({ apiKey, fetch: apiFetch as typeof fetch, maxRetries: 1, timeout: 120_000 })
+
+/** Find a key Anthropic accepts. Returns the client and which source it came from. */
+export async function claudeClient(env: Env): Promise<{ client: Anthropic; source: string; models: string[] } | { client: null; source: null; error: string }> {
+  const sources = keySources(env)
+  const ordered = workingSource ? [...sources.filter((s) => s.name === workingSource), ...sources.filter((s) => s.name !== workingSource)] : sources
+  const errors: string[] = []
+  for (const src of ordered) {
+    const key = (await src.get())?.trim()
+    if (!key) { errors.push(`${src.name}: empty`); continue }
+    const client = mk(key)
+    try {
+      const page = await client.models.list({ limit: 50 })
+      workingSource = src.name
+      return { client, source: src.name, models: page.data.map((m) => m.id) }
+    } catch (e) {
+      if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) { errors.push(`${src.name}: rejected (${e.status})`); continue }
+      if (e instanceof Anthropic.APIError) { errors.push(`${src.name}: API ${e.status} ${e.message}`); continue }
+      errors.push(`${src.name}: ${String((e as Error).message ?? e)}`)
+    }
+  }
+  return { client: null, source: null, error: `No working Anthropic key. ${errors.join('; ')}` }
 }
 
-/** Cheap connectivity check: list models with the stored key. */
-export async function testClaude(env: Env): Promise<{ ok: true; models: string[] } | { ok: false; error: string }> {
-  const client = await claudeClient(env)
-  if (!client) return { ok: false, error: 'No Claude API key stored. Add one in Settings.' }
-  try {
-    const page = await client.models.list({ limit: 20 })
-    return { ok: true, models: page.data.map((m) => m.id) }
-  } catch (e) {
-    if (e instanceof Anthropic.AuthenticationError) return { ok: false, error: 'Anthropic rejected the key (authentication error).' }
-    if (e instanceof Anthropic.APIError) return { ok: false, error: `Anthropic API error ${e.status}: ${e.message}` }
-    return { ok: false, error: String((e as Error).message ?? e) }
-  }
+/** Connectivity check: which key source works and what models it can see. */
+export async function testClaude(env: Env): Promise<{ ok: true; models: string[]; source: string } | { ok: false; error: string }> {
+  const c = await claudeClient(env)
+  return c.client ? { ok: true, models: c.models, source: c.source } : { ok: false, error: c.error }
 }
 
 type ModelRow = { ix: number; title: string; labels: string[]; bbox: { minX: number; minY: number; maxX: number; maxY: number }; entityCount: number; wallCount: number; objectId?: string | null }
@@ -106,9 +129,13 @@ Rules:
 - Be decisive. If two regions are nearly identical, keep exactly one.`
 
 export async function reviewPlans(env: Env, fileId: string, actor: string): Promise<AgentReview | null> {
-  const client = await claudeClient(env)
-  if (!client) return null
+  const c = await claudeClient(env)
   const db = env.DB
+  if (!c.client) {
+    await updateStmt(db, 'cad_files', fileId, { agent_review: JSON.stringify({ error: c.error, at: new Date().toISOString() }) }).run()
+    throw new Error(c.error)
+  }
+  const client = c.client
   const file = await one<{ id: string; project_id: string; filename: string; models: string | null; insunits: number | null }>(db, 'SELECT id, project_id, filename, models, insunits FROM cad_files WHERE id = ?', fileId)
   if (!file) throw new Error('File not found.')
   const models = JSON.parse(file.models ?? '[]') as ModelRow[]
@@ -127,7 +154,7 @@ export async function reviewPlans(env: Env, fileId: string, actor: string): Prom
   if (response.stop_reason === 'refusal') throw new Error(`Claude declined the review: ${response.stop_details?.explanation ?? 'no explanation'}`)
   const parsed = response.parsed_output
   if (!parsed) throw new Error('Claude returned an unreadable review.')
-  const review: AgentReview = { ...parsed, model: response.model, at: new Date().toISOString(), usage: { input: response.usage.input_tokens, output: response.usage.output_tokens } }
+  const review: AgentReview = { ...parsed, model: response.model, at: new Date().toISOString(), usage: { input: response.usage.input_tokens, output: response.usage.output_tokens }, source: c.source }
 
   // Apply: rename kept plans, park the rest. Names stay editable by the person afterwards.
   for (const d of review.pages) {

@@ -31,7 +31,11 @@ interface AuthService {
 /** After a conversion finishes, let Claude decide which pages are the floor plans (best effort, never blocks the job). */
 async function reviewAfterJob(env: Env, r: { status: string; fileId?: string; kind?: string }): Promise<void> {
   if (r.status !== 'SUCCESS' || r.kind !== 'CONVERT' || !r.fileId) return
-  try { await reviewPlans(env, r.fileId, 'agent') } catch (e) { console.error(JSON.stringify({ level: 'warn', msg: 'claude review failed', file: r.fileId, err: String(e) })) }
+  try { await reviewPlans(env, r.fileId, 'agent') } catch (e) {
+    console.error(JSON.stringify({ level: 'error', msg: 'claude review failed', file: r.fileId, err: String(e) }))
+    // The review is mandatory: record the failure on the file so the review page shows it and offers a retry.
+    await updateStmt(env.DB, 'cad_files', r.fileId, { agent_review: JSON.stringify({ error: String((e as Error).message ?? e), at: new Date().toISOString() }) }).run().catch(() => undefined)
+  }
 }
 const auth = (env: Env) => env.AUTH as unknown as AuthService
 const calc = (env: Env) => env.CALC as unknown as CalcService
@@ -132,7 +136,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   // ---- settings → Claude review agent (key sealed in app_settings under APP_KEK; used server-side only)
   if (seg[0] === 'settings' && seg[1] === 'claude') {
-    if (!seg[2] && method === 'GET') return ok({ configured: await hasSealed(env, CLAUDE_KEY), model: CLAUDE_MODEL })
+    if (!seg[2] && method === 'GET') { const t = await testClaude(env); return ok({ configured: t.ok, source: t.ok ? t.source : null, error: t.ok ? null : t.error, sealed: await hasSealed(env, CLAUDE_KEY), model: CLAUDE_MODEL }) }
     if (seg[2] === 'key' && method === 'POST') {
       const b = await readJson<{ apiKey?: string }>(request)
       const key = b.apiKey?.trim() ?? ''
