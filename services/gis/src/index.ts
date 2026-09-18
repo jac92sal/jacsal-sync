@@ -2,6 +2,9 @@ import { WorkerEntrypoint } from 'cloudflare:workers'
 import { socketFetch } from '../../../shared/socket-http'
 import { open, seal } from '../../../shared/secretbox'
 import { ArcgisPortalError, createArcgisApiKey } from './apikey'
+import { geocodeArcgis, geocodeCensus, type GeocodeInput, type GeocodeResult } from './geocode'
+
+export type { GeocodeInput, GeocodeResult }
 
 /**
  * GisService — shared GIS capability over a Service Binding.
@@ -157,6 +160,21 @@ export class GisService extends WorkerEntrypoint<Env> {
     const key = await this.token().catch(() => '')
     const r = await this.esri(`${ELEVATION}/at-point?lon=-77.0736&lat=38.9315&f=json&token=${key}`)
     return { source: status.source, keyLength: key.length, keyHead: key.slice(0, 4), referer: this.env.ARCGIS_REFERER, status: r.status, body: (await r.text()).slice(0, 160) }
+  }
+
+  /**
+   * Verify a US address: Census geocoder first (free, returns city/county/state/ZIP + jurisdiction),
+   * ArcGIS World Geocoding as a fallback when the active key has a geocoding privilege.
+   */
+  async geocode(input: GeocodeInput): Promise<GeocodeResult | null> {
+    if (!input.address?.trim()) throw new Error('Street address is required.')
+    const census = await geocodeCensus(input).catch(() => null)
+    if (census) return census
+    try {
+      return await geocodeArcgis(input, await this.token(), this.referer)
+    } catch {
+      return null
+    }
   }
 
   /** Elevation in metres (mean sea level) for one lon/lat. */

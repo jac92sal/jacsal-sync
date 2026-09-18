@@ -23,6 +23,8 @@ export interface DxfDocument {
   extmin?: Pt
   extmax?: Pt
   entities: DxfEntity[]
+  /** Present after parsing: how much of the file was retained. */
+  stats?: DxfStats
 }
 type Raw = Record<string, string[]>
 
@@ -32,50 +34,102 @@ export function unitsToFeet(insunits: number): number {
   return m[insunits] ?? 1 / 12
 }
 
-export function parseDxf(text: string): DxfDocument {
-  const lines = text.split(/\r?\n/)
-  const doc: DxfDocument = { insunits: 0, entities: [] }
-  let section = ''
-  let i = 0
-  let cur: { type: string; raw: Raw } | null = null
-  let lastInsert: DxfEntity | null = null
-  let headerVar = ''
+const KEEP = new Set(['LINE', 'LWPOLYLINE', 'CIRCLE', 'ARC', 'TEXT', 'MTEXT', 'INSERT', 'DIMENSION'])
+/** Never dropped by the entity cap: they carry the semantics (labels, blocks, dimensions, room outlines). */
+const PRIORITY = new Set(['TEXT', 'MTEXT', 'INSERT', 'DIMENSION', 'LWPOLYLINE'])
+/** Upper bound on retained entities so a 100 MB+ DXF cannot exhaust Worker memory. */
+export const MAX_ENTITIES = 150_000
 
-  const flush = () => {
-    if (!cur) return
-    const { type, raw } = cur
-    cur = null
-    if (type === 'ATTRIB' && lastInsert) {
-      const tag = raw['2']?.[0] ?? ''
-      lastInsert.attribs = { ...(lastInsert.attribs ?? {}), [tag]: raw['1']?.[0] ?? '' }
+export interface DxfStats { seen: number; kept: number; dropped: number; paperSpace: number; bytes: number }
+
+/**
+ * Incremental DXF reader: feed text chunks with push(), finish with end().
+ * Only the HEADER variables we need and model-space entities of the kept types are retained;
+ * BLOCKS, OBJECTS, binary chunks (310) and paper-space entities are skipped without allocation.
+ */
+export class DxfStreamParser {
+  readonly doc: DxfDocument = { insunits: 0, entities: [] }
+  readonly stats: DxfStats = { seen: 0, kept: 0, dropped: 0, paperSpace: 0, bytes: 0 }
+  private tail = ''
+  private pendingCode: string | null = null
+  private section = ''
+  private afterSection = false
+  private cur: { type: string; raw: Raw } | null = null
+  private lastInsert: DxfEntity | null = null
+  private headerVar = ''
+
+  push(chunk: string): void {
+    this.stats.bytes += chunk.length
+    const text = this.tail ? this.tail + chunk : chunk
+    let start = 0
+    for (;;) {
+      const nl = text.indexOf('\n', start)
+      if (nl < 0) break
+      this.line(text.slice(start, nl))
+      start = nl + 1
+    }
+    this.tail = text.slice(start)
+  }
+
+  end(): DxfDocument {
+    if (this.tail.length) { this.line(this.tail); this.tail = '' }
+    this.flush()
+    this.doc.stats = this.stats
+    return this.doc
+  }
+
+  private line(raw: string): void {
+    const l = raw.trim()
+    if (this.pendingCode === null) { this.pendingCode = l; return }
+    const code = this.pendingCode; this.pendingCode = null
+    this.pair(code, l)
+  }
+
+  private pair(code: string, value: string): void {
+    if (this.afterSection) { this.afterSection = false; if (code === '2') { this.section = value; return } }
+    if (code === '0' && value === 'SECTION') { this.afterSection = true; return }
+    if (code === '0' && value === 'ENDSEC') { this.flush(); this.section = ''; return }
+    if (this.section === 'HEADER') {
+      if (code === '9') this.headerVar = value
+      else if (this.headerVar === '$INSUNITS' && code === '70') this.doc.insunits = Number(value)
+      else if (this.headerVar === '$EXTMIN' && code === '10') this.doc.extmin = { x: Number(value), y: 0 }
+      else if (this.headerVar === '$EXTMIN' && code === '20' && this.doc.extmin) this.doc.extmin.y = Number(value)
+      else if (this.headerVar === '$EXTMAX' && code === '10') this.doc.extmax = { x: Number(value), y: 0 }
+      else if (this.headerVar === '$EXTMAX' && code === '20' && this.doc.extmax) this.doc.extmax.y = Number(value)
       return
     }
-    if (!['LINE', 'LWPOLYLINE', 'CIRCLE', 'ARC', 'TEXT', 'MTEXT', 'INSERT', 'DIMENSION'].includes(type)) return
-    const e = finalize(type, raw)
-    if (type === 'INSERT') lastInsert = e
-    doc.entities.push(e)
+    if (this.section !== 'ENTITIES') return
+    if (code === '0') {
+      this.flush()
+      this.stats.seen++
+      this.cur = KEEP.has(value) || value === 'ATTRIB' ? { type: value, raw: {} } : null
+      return
+    }
+    if (!this.cur || code === '310') return
+    ;(this.cur.raw[code] ??= []).push(value)
   }
 
-  while (i + 1 < lines.length) {
-    const code = lines[i].trim(); const value = lines[i + 1].trim(); i += 2
-    if (code === '0' && value === 'SECTION') { section = lines[i + 1]?.trim() ?? ''; i += 2; continue }
-    if (code === '0' && value === 'ENDSEC') { flush(); section = ''; continue }
-    if (section === 'HEADER') {
-      if (code === '9') headerVar = value
-      else if (headerVar === '$INSUNITS' && code === '70') doc.insunits = Number(value)
-      else if (headerVar === '$EXTMIN' && code === '10') doc.extmin = { x: Number(value), y: 0 }
-      else if (headerVar === '$EXTMIN' && code === '20' && doc.extmin) doc.extmin.y = Number(value)
-      else if (headerVar === '$EXTMAX' && code === '10') doc.extmax = { x: Number(value), y: 0 }
-      else if (headerVar === '$EXTMAX' && code === '20' && doc.extmax) doc.extmax.y = Number(value)
-      continue
+  private flush(): void {
+    if (!this.cur) return
+    const { type, raw } = this.cur
+    this.cur = null
+    if (raw['67']?.[0] === '1') { this.stats.paperSpace++; return }
+    if (type === 'ATTRIB') {
+      if (this.lastInsert) { const tag = raw['2']?.[0] ?? ''; this.lastInsert.attribs = { ...(this.lastInsert.attribs ?? {}), [tag]: raw['1']?.[0] ?? '' } }
+      return
     }
-    if (section !== 'ENTITIES') continue
-    if (code === '0') { flush(); cur = { type: value, raw: {} }; continue }
-    if (!cur) continue
-    ;(cur.raw[code] ??= []).push(value)
+    if (this.doc.entities.length >= MAX_ENTITIES && !PRIORITY.has(type)) { this.stats.dropped++; return }
+    const e = finalize(type, raw)
+    if (type === 'INSERT') this.lastInsert = e
+    this.doc.entities.push(e)
+    this.stats.kept++
   }
-  flush()
-  return doc
+}
+
+export function parseDxf(text: string): DxfDocument {
+  const p = new DxfStreamParser()
+  p.push(text)
+  return p.end()
 }
 
 function finalize(type: string, r: Raw): DxfEntity {

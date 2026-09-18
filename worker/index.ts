@@ -15,7 +15,7 @@ import { issueGate } from './lib/gate'
 import { getFile, pendingJobs, processJob, uploadFile, writeBack } from './lib/cad'
 import type { CalcService } from '../services/calc/src/index'
 import type { CadService } from '../services/cad/src/index'
-import { ARCGIS_PRIVILEGES, type GisService } from '../services/gis/src/index'
+import { ARCGIS_PRIVILEGES, type GeocodeResult, type GisService } from '../services/gis/src/index'
 
 const SESSION_COOKIE = 'jacsal_session'
 interface AuthUser { id: string; email: string; name: string | null; emailVerified: boolean }
@@ -111,6 +111,15 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (seg[0] === 'calc' && seg[1] === 'benchmarks') return ok({ benchmarks: await calc(env).benchmarks() })
   if (seg[0] === 'calc' && seg[1] === 'runs' && seg[2]) { const r = await getCalcRun(db, seg[2]); if (!r) throw notFound(); return ok({ run: r }) }
 
+  // ---- address verification (Census geocoder via GIS service; ArcGIS fallback)
+  if (seg[0] === 'geocode' && method === 'POST') {
+    const b = await readJson<{ address?: string; city?: string; state?: string; zip?: string }>(request)
+    if (!b.address?.trim()) throw badRequest('Enter a street address.')
+    const result = await gis(env).geocode({ address: b.address, city: b.city, state: b.state, zip: b.zip })
+    if (!result) return ok({ result: null, message: 'No match. Add the city and state or the ZIP code and try again.' })
+    return ok({ result, fields: geocodeToProjectFields(result) })
+  }
+
   // ---- settings → ArcGIS API key (created from the user's ArcGIS sign-in; password is used in-request only)
   if (seg[0] === 'settings' && seg[1] === 'arcgis') {
     if (!seg[2] && method === 'GET') return ok({ status: await gis(env).keyStatus(), privileges: ARCGIS_PRIVILEGES })
@@ -140,14 +149,19 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       const b = await readJson<Record<string, unknown>>(request)
       if (!b.name || typeof b.name !== 'string') throw badRequest('name is required.')
       const id = uuid()
-      const fields = ['address', 'city', 'county', 'jurisdiction', 'apn', 'prepared_for', 'prepared_by', 'project_no', 'code_path', 'risk_category', 'design_method', 'occupancy', 'stories', 'lat', 'lng']
+      const fields = ['address', 'city', 'state', 'zip', 'county', 'jurisdiction', 'apn', 'prepared_for', 'prepared_by', 'project_no', 'code_path', 'risk_category', 'design_method', 'occupancy', 'stories', 'lat', 'lng']
       const row: Record<string, unknown> = { id, name: b.name, created_by: actor, status: 'SETUP' }
       for (const f of fields) if (b[f] !== undefined) row[f] = b[f]
+      let geocode: GeocodeResult | null = null
+      if (typeof row.address === 'string' && row.address.trim() && b.verify !== false) {
+        geocode = await gis(env).geocode({ address: row.address, city: str(row.city), state: str(row.state), zip: str(row.zip) }).catch(() => null)
+        if (geocode) Object.assign(row, geocodeToProjectFields(geocode, row))
+      }
       await insertStmt(db, 'projects', row).run()
       await createObject(db, id, { type: 'PROJECT', humanName: b.name, semanticTag: 'PROJECT' })
       const lvl = await createObject(db, id, { type: 'LEVEL', humanName: 'Level 01', semanticTag: 'LEVEL.01', parentId: (await one<{ id: string }>(db, 'SELECT id FROM objects WHERE project_id = ? AND type = ?', id, 'PROJECT'))?.id })
       await insertStmt(db, 'audit_log', { id: uuid(), project_id: id, actor, action: 'project.created', target_kind: 'PROJECT', target_id: id, detail: { level: lvl.id } }).run()
-      return ok({ project: await one(db, 'SELECT * FROM projects WHERE id = ?', id) })
+      return ok({ project: await one(db, 'SELECT * FROM projects WHERE id = ?', id), geocode })
     }
   }
   if (seg[0] === 'projects' && seg[1]) {
@@ -159,10 +173,18 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       if (method === 'GET') return ok({ project, gate: await issueGate(db, pid), counts: await counts(db, pid) })
       if (method === 'PATCH') {
         const b = await readJson<Record<string, unknown>>(request)
-        const allowed = ['name', 'address', 'city', 'county', 'jurisdiction', 'apn', 'prepared_for', 'prepared_by', 'project_no', 'code_path', 'risk_category', 'design_method', 'occupancy', 'stories', 'lat', 'lng', 'status']
+        const allowed = ['name', 'address', 'city', 'state', 'zip', 'county', 'jurisdiction', 'apn', 'prepared_for', 'prepared_by', 'project_no', 'code_path', 'risk_category', 'design_method', 'occupancy', 'stories', 'lat', 'lng', 'status', 'matched_address', 'geocode_source']
         const patch: Record<string, unknown> = {}; for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k]
+        let geocode: GeocodeResult | null = null
+        if (b.verify === true) {
+          const merged = { ...project, ...patch } as Record<string, unknown>
+          if (!str(merged.address)) throw badRequest('Enter a street address to verify.')
+          geocode = await gis(env).geocode({ address: str(merged.address)!, city: str(merged.city), state: str(merged.state), zip: str(merged.zip) })
+          if (!geocode) throw badRequest('No match for that address. Add the city and state or the ZIP code.')
+          Object.assign(patch, geocodeToProjectFields(geocode, merged))
+        }
         if (Object.keys(patch).length) await updateStmt(db, 'projects', pid, patch).run()
-        return ok({ project: await one(db, 'SELECT * FROM projects WHERE id = ?', pid) })
+        return ok({ project: await one(db, 'SELECT * FROM projects WHERE id = ?', pid), geocode })
       }
     }
     if (rest[0] === 'inputs') {
@@ -319,3 +341,19 @@ async function authRoutes(request: Request, env: Env, method: string, seg: strin
   throw notFound('Unknown auth endpoint.')
 }
 function ok(data: Record<string, unknown>, init?: ResponseInit): Response { return new Response(JSON.stringify({ ok: true, ...data }), { ...init, headers: { 'content-type': 'application/json; charset=utf-8', ...(init?.headers ?? {}) } }) }
+
+
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+
+/** Map a verified address onto project columns. Existing engineering choices (code path etc.) are kept unless empty. */
+function geocodeToProjectFields(g: GeocodeResult, current: Record<string, unknown> = {}): Record<string, unknown> {
+  const codePath = str(current.code_path) ?? (g.state === 'CA' ? 'CBC' : 'IBC')
+  return {
+    address: g.street ?? current.address,
+    city: g.city, state: g.state, zip: g.zip, county: g.county,
+    jurisdiction: g.jurisdiction,
+    lat: g.lat, lng: g.lng,
+    matched_address: g.matchedAddress, geocode_source: g.source,
+    code_path: codePath,
+  }
+}

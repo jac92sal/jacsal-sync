@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
-import { parseDxf, type DxfDocument, type DxfEntity } from './dxf'
+import { DxfStreamParser, parseDxf, type DxfDocument, type DxfEntity } from './dxf'
 import { detect, type Candidate } from './detect'
 import * as aps from './aps'
 import puppeteer from '@cloudflare/puppeteer'
@@ -34,17 +34,41 @@ export class CadService extends WorkerEntrypoint<Env> {
   parseDxf(text: string): DxfDocument {
     return parseDxf(text)
   }
-  /** Parse + detect candidate objects/fields in one call (the common path). */
+  /** Parse + detect candidate objects/fields in one call (small DXF text only; large files go through analyzeR2). */
   analyzeDxf(text: string): { doc: DxfDocument; candidates: Candidate[] } {
     const doc = parseDxf(text)
     return { doc, candidates: detect(doc) }
   }
 
-  /** Design Automation: submit a job. `kind` decides the script. Returns the workitem id. */
-  async submitJob(kind: 'CONVERT' | 'WRITEBACK' | 'RESCAN', jobId: string, inputDwg: ArrayBuffer, ops: WriteOp[] = [], onComplete?: string): Promise<{ workitemId: string; bucketKey: string; keys: { input: string; script: string; result: string; dxf: string }; uploadKeys: { result: string; dxf: string } }> {
-    return this.withAps(() => this.submitJobInner(kind, jobId, inputDwg, ops, onComplete))
+  /**
+   * Parse + detect straight from an R2 object, streaming, so a 100 MB+ DXF never has to be
+   * held whole or cross the service-binding RPC limit. Detection runs over every retained
+   * entity; the returned entity list is capped (the app stores that many) and doc.stats says how much was kept.
+   */
+  async analyzeR2(key: string, returnEntities = 20_000): Promise<{ doc: DxfDocument; candidates: Candidate[]; entityCount: number }> {
+    const obj = await this.env.FILES.get(key)
+    if (!obj) throw new Error(`DXF not found in storage: ${key}`)
+    const parser = new DxfStreamParser()
+    const reader = obj.body.pipeThrough(new TextDecoderStream()).getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parser.push(value)
+    }
+    const doc = parser.end()
+    const candidates = detect(doc)
+    return { doc: { ...doc, entities: doc.entities.slice(0, returnEntities) }, candidates, entityCount: doc.entities.length }
   }
-  private async submitJobInner(kind: 'CONVERT' | 'WRITEBACK' | 'RESCAN', jobId: string, inputDwg: ArrayBuffer, ops: WriteOp[], onComplete?: string) {
+
+  /** Design Automation: submit a job. `kind` decides the script. Returns the workitem id. */
+  async submitJob(kind: 'CONVERT' | 'WRITEBACK' | 'RESCAN', jobId: string, inputR2Key: string, ops: WriteOp[] = [], onComplete?: string): Promise<{ workitemId: string; bucketKey: string; keys: { input: string; script: string; result: string; dxf: string }; uploadKeys: { result: string; dxf: string } }> {
+    return this.withAps(() => this.submitJobInner(kind, jobId, inputR2Key, ops, onComplete))
+  }
+  private async submitJobInner(kind: 'CONVERT' | 'WRITEBACK' | 'RESCAN', jobId: string, inputR2Key: string, ops: WriteOp[], onComplete?: string) {
+    // The DWG is read from shared storage rather than passed over RPC (32 MiB cap on service-binding arguments).
+    const input = await this.env.FILES.get(inputR2Key)
+    if (!input) throw new Error(`Drawing not found in storage: ${inputR2Key}`)
+    const inputDwg = await input.arrayBuffer()
     const c = await this.creds(); const token = await aps.apsToken(c)
     const bucketKey = aps.bucketKeyFor(c.clientId)
     await aps.ensureBucket(token, bucketKey, this.env.APS_REGION)
@@ -92,6 +116,39 @@ export class CadService extends WorkerEntrypoint<Env> {
     if (want.dxf) { await aps.completeUpload(token, bucketKey, keys.dxf, uploadKeys.dxf).catch(() => undefined); out.dxf = await (await fetch(await aps.signedDownloadUrl(token, bucketKey, keys.dxf))).text() }
     if (want.result) { await aps.completeUpload(token, bucketKey, keys.result, uploadKeys.result).catch(() => undefined); out.result = await (await fetch(await aps.signedDownloadUrl(token, bucketKey, keys.result))).arrayBuffer() }
     return out
+  }
+
+  /**
+   * Stream Design Automation outputs from Autodesk OSS straight into R2 under the given keys.
+   * Nothing is buffered in memory or returned over RPC; the caller gets byte counts.
+   */
+  async fetchOutputsToR2(bucketKey: string, keys: { result: string; dxf: string }, uploadKeys: { result: string; dxf: string }, targets: { result?: string; dxf?: string }): Promise<{ result?: number; dxf?: number }> {
+    return this.withAps(async () => {
+      const token = await aps.apsToken(await this.creds())
+      const out: { result?: number; dxf?: number } = {}
+      for (const name of ['dxf', 'result'] as const) {
+        const r2Key = targets[name]
+        if (!r2Key) continue
+        await aps.completeUpload(token, bucketKey, keys[name], uploadKeys[name]).catch(() => undefined)
+        const r = await fetch(await aps.signedDownloadUrl(token, bucketKey, keys[name]))
+        if (!r.ok || !r.body) throw new Error(`Design Automation output ${name} download failed: ${r.status}`)
+        const contentType = name === 'dxf' ? 'application/dxf' : 'application/acad'
+        const len = Number(r.headers.get('content-length'))
+        if (Number.isFinite(len) && len > 0) {
+          // R2 needs a known length for streamed bodies.
+          const { readable, writable } = new FixedLengthStream(len)
+          const piping = r.body.pipeTo(writable)
+          const put = await this.env.FILES.put(r2Key, readable, { httpMetadata: { contentType } })
+          await piping
+          out[name] = put?.size ?? len
+        } else {
+          const buf = await r.arrayBuffer()
+          await this.env.FILES.put(r2Key, buf, { httpMetadata: { contentType } })
+          out[name] = buf.byteLength
+        }
+      }
+      return out
+    })
   }
 
   /** Fetch a Design Automation report (plain text log) for diagnostics. */

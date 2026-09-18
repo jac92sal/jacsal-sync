@@ -11,6 +11,11 @@
   "upload_source_maps": true,
   // Headless browser parked on the Autodesk origin: Worker subrequests to developer.api.autodesk.com get HTTP 525.
   "browser": { "binding": "BROWSER" },
+  // Same bucket as the app: DWG inputs are read from here and Design Automation outputs are streamed
+  // straight into it, so no drawing ever crosses the 32 MiB service-binding RPC limit.
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "jacsal-sync-files" }],
+  // Parsing a 100 MB+ DXF is CPU-bound; lift the default 30 s budget.
+  "limits": { "cpu_ms": 300000 },
   "secrets_store_secrets": [
     { "binding": "APS_CLIENT_ID",     "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APS_CLIENT_ID" },
     { "binding": "APS_CLIENT_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APS_CLIENT_SECRET" },

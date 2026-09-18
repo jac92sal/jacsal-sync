@@ -21,7 +21,7 @@ export const api = {
 }
 
 export interface User { id: string; email: string; name: string | null }
-export interface Project { id: string; name: string; address?: string; city?: string; jurisdiction?: string; code_path?: string; risk_category?: string; design_method?: string; stories?: number; lat?: number; lng?: number; status: string; object_count?: number; pending_candidates?: number; open_changes?: number; updated_at: string }
+export interface Project { id: string; name: string; address?: string; city?: string; state?: string; zip?: string; county?: string; matched_address?: string; geocode_source?: string; jurisdiction?: string; code_path?: string; risk_category?: string; design_method?: string; stories?: number; lat?: number; lng?: number; status: string; object_count?: number; pending_candidates?: number; open_changes?: number; updated_at: string }
 export interface Geometry { x1?: number; y1?: number; x2?: number; y2?: number; x?: number; y?: number; points?: { x: number; y: number }[] }
 export interface Obj { id: string; projectId: string; type: string; humanName: string; semanticTag: string; parentId: string | null; hostId: string | null; function: string | null; anchorRule: string | null; anchorParams: Record<string, unknown>; geometry: Geometry; geometrySource: string | null; derived: Record<string, unknown>; properties: Record<string, unknown>; verificationState: string; approvalState: string; revision: number }
 export interface Candidate { id: string; kind: string; human_name: string; semantic_tag: string | null; detected_value: unknown; unit: string | null; confidence: number | null; source_handles: string[]; method: string | null; action: string; confirmed_value: unknown; backend_target: string | null; object_id: string | null; anchor_rule: string | null; anchor_params: Record<string, unknown>; host_key: string | null; ckey: string | null; file_id: string | null }
@@ -31,3 +31,7 @@ export interface GateRow { domain: string; functionState: string; verificationSt
 export interface CadFile { id: string; filename: string; kind: string; status: string; revision: number; entity_count: number | null; error: string | null; created_at: string }
 
 export const ftIn = (ft: number | undefined | null) => (ft === undefined || ft === null || Number.isNaN(ft)) ? '—' : `${Math.floor(ft)}'-${(Math.round((ft % 1) * 12 * 4) / 4).toString().replace(/\.0+$/, '')}"`
+export interface GeocodeResult { matchedAddress: string; lat: number; lng: number; street: string | null; city: string | null; county: string | null; state: string | null; zip: string | null; jurisdiction: string; incorporated: boolean; source: string }
+export const CODE_PATHS = ['CBC', 'CRC', 'IBC', 'IRC'] as const
+export const RISK_CATEGORIES = ['I', 'II', 'III', 'IV'] as const
+export const DESIGN_METHODS = ['ASD', 'LRFD'] as const

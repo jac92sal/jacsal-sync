@@ -64,3 +64,29 @@ describe('dxf patcher', () => {
     expect(d.entities[1].text).toBe('PRIMARY BEDROOM 2')
   })
 })
+
+import { DxfStreamParser } from '../src/dxf'
+describe('DxfStreamParser', () => {
+  const pairs = (rows: [string, string][]) => rows.map(([c, v]) => `${c}\n${v}`).join('\n') + '\n'
+  const dxf = pairs([
+    ['0', 'SECTION'], ['2', 'HEADER'], ['9', '$INSUNITS'], ['70', '1'], ['0', 'ENDSEC'],
+    ['0', 'SECTION'], ['2', 'BLOCKS'], ['0', 'LINE'], ['5', 'B1'], ['8', '0'], ['10', '0'], ['20', '0'], ['11', '5'], ['21', '5'], ['0', 'ENDSEC'],
+    ['0', 'SECTION'], ['2', 'ENTITIES'],
+    ['0', 'LINE'], ['5', 'A1'], ['8', 'A-WALL'], ['10', '0'], ['20', '0'], ['11', '120'], ['21', '0'],
+    ['0', 'LINE'], ['5', 'P1'], ['67', '1'], ['8', 'A-WALL'], ['10', '0'], ['20', '0'], ['11', '1'], ['21', '1'],
+    ['0', 'HATCH'], ['5', 'H1'], ['310', 'DEADBEEF'],
+    ['0', 'TEXT'], ['5', 'T1'], ['8', 'A-ANNO'], ['10', '60'], ['20', '2'], ['1', 'KITCHEN'],
+    ['0', 'ENDSEC'], ['0', 'EOF'],
+  ])
+  it('streams across arbitrary chunk boundaries and skips blocks, paper space and unknown types', () => {
+    for (const size of [1, 7, 64, 100_000]) {
+      const p = new DxfStreamParser()
+      for (let i = 0; i < dxf.length; i += size) p.push(dxf.slice(i, i + size))
+      const doc = p.end()
+      expect(doc.insunits).toBe(1)
+      expect(doc.entities.map((e) => e.handle)).toEqual(['A1', 'T1'])
+      expect(doc.stats?.paperSpace).toBe(1)
+      expect(doc.stats?.seen).toBe(4)
+    }
+  })
+})
