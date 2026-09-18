@@ -5,6 +5,7 @@ import { api, ftIn, unitsToFeet, type AgentReview, type CadEntity, type CadFile,
 import { Card, Pill } from '../components/ui'
 import { focusBox } from '../components/PlanViewer'
 import { ApsViewer, type ViewerHandle } from '../components/ApsViewer'
+import type { SyncBridge } from '../viewer/SyncPropertiesExtension'
 import { useRef } from 'react'
 
 const KINDS: Record<string, string[]> = { WALL: ['WALL', 'BEAM', 'SHEAR_WALL'], BEAM: ['BEAM', 'WALL'], WINDOW: ['WINDOW', 'DOOR'], DOOR: ['DOOR', 'WINDOW'], ROOM: ['ROOM'] }
@@ -90,6 +91,33 @@ export default function ModelReview() {
     return () => { stop = true }
   }, [fileId])
   const getToken = () => api.get<{ access_token: string; expires_in: number }>('/viewer/token')
+  // Property-panel bridge (aps-db-sample pattern). Refs keep it pointed at the latest state.
+  const candsRef = useRef<Candidate[]>([]); candsRef.current = cands
+  const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null)
+  const bridgeRef = useRef<SyncBridge>({
+    lookup: (handles) => {
+      const set = new Set(handles.map((h) => h.toUpperCase()))
+      const c = candsRef.current.find((x) => x.source_handles.some((h) => set.has(h.toUpperCase())))
+      const kinds = c ? (KINDS[c.kind] ?? [c.kind]) : ['WALL', 'WINDOW', 'DOOR', 'BEAM', 'ROOM']
+      return c
+        ? { candidateId: c.id, handle: c.source_handles[0] ?? handles[0] ?? null, kind: c.kind, label: c.human_name ?? '', tag: c.semantic_tag, status: c.action, detectedAs: `${c.kind.toLowerCase()} · ${c.method ?? ''}`, kinds }
+        : { candidateId: null, handle: handles[0] ?? null, kind: 'WALL', label: '', tag: null, status: 'NOT DETECTED', detectedAs: 'nothing detected here; tag it below', kinds }
+    },
+    confirm: async (candidateId, handle, label, kind) => {
+      let id = candidateId
+      if (!id) { const r = await api.post<{ candidate: Candidate }>(`/files/${fileId}/candidates`, { handle, kind, humanName: label }); id = r.candidate.id }
+      await api.post(`/candidates/${id}`, { action: 'CONFIRM', humanName: label, kind })
+      await loadCands(); await ctx.reload()
+    },
+    ignore: async (candidateId) => { await api.post(`/candidates/${candidateId}`, { action: 'IGNORE' }); await loadCands(); await ctx.reload() },
+    notify: (text, ok) => { setToast({ text, ok }); setTimeout(() => setToast(null), 3500) },
+  })
+  bridgeRef.current.confirm = async (candidateId, handle, label, kind) => {
+    let id = candidateId
+    if (!id) { const r = await api.post<{ candidate: Candidate }>(`/files/${fileId}/candidates`, { handle, kind, humanName: label }); id = r.candidate.id }
+    await api.post(`/candidates/${id}`, { action: 'CONFIRM', humanName: label, kind })
+    await loadCands(); await ctx.reload()
+  }
   // Viewer → walk-through: selecting an entity in the drawing picks the candidate that references its handle.
   const onSelectHandles = (handles: string[]) => {
     const set = new Set(handles)
@@ -165,16 +193,17 @@ export default function ModelReview() {
         <Link className="text-accent underline" to="list">table view</Link></div>}>
         {planStrip}
         {models.length === 0 && file && <div className="px-4 pt-3 text-xs text-muted">No separate model pages were recognised in {file.filename}; showing the whole drawing.</div>}
-        <div className="p-3" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>
+        <div className="p-3 relative" style={{ height: 'calc(100vh - 260px)', minHeight: 560 }}>
           {viewer?.status === 'success'
-            ? <ApsViewer urn={viewer.urn} getToken={getToken} onSelectHandles={onSelectHandles} onReady={(h) => { vh.current = h; if (entities.length) h.fitHandles(entities.map((e) => e.handle)) }} />
+            ? <><ApsViewer urn={viewer.urn} getToken={getToken} bridge={bridgeRef.current} onSelectHandles={onSelectHandles} onReady={(h) => { vh.current = h; if (entities.length) h.fitHandles(entities.map((e) => e.handle)) }} />
+                {toast && <div className={`absolute left-4 bottom-4 px-3 py-2 rounded text-sm shadow ${toast.ok ? 'bg-ok text-white' : 'bg-bad text-white'}`}>{toast.text}</div>}</>
             : <div className="h-full grid place-items-center text-sm text-muted text-center px-6">
                 {viewerErr ? <span className="text-bad">{viewerErr}</span>
                   : viewer?.status === 'failed' || viewer?.status === 'timeout' ? <span className="text-bad">Autodesk could not translate this drawing ({viewer.status}). {viewer.messages.join(' ')} <button className="underline text-accent" onClick={() => api.post(`/files/${fileId}/viewer?force=1`).then(() => window.location.reload())}>Retry</button></span>
                   : <span>Preparing the AutoCAD view with Autodesk Model Derivative… {viewer?.progress ?? ''}<br /><span className="text-xs">First time takes one to three minutes for a drawing this size; after that it opens instantly.</span></span>}
               </div>}
         </div>
-        <div className="px-4 pb-3 text-xs text-muted">This is AutoCAD's own rendering of the DWG (Autodesk Viewer). Click an entity to review it, or use Next to walk through; the view frames each element as you go. Layers, measure, and the sheet browser are in the viewer toolbar.</div>
+        <div className="px-4 pb-3 text-xs text-muted">AutoCAD's own rendering (Autodesk Viewer). Click a wall, window, or door, then open the properties panel (the "i" button in the toolbar): the Engineering Sync section shows what was detected, lets you set the Type and Label, and Confirm writes it to the model. Anything not detected can be tagged the same way.</div>
       </Card>
 
       <Card title={`Walk-through · ${done} of ${onPage.length} reviewed`} right={<label className="text-xs flex items-center gap-1"><input type="checkbox" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} /> pending only</label>}>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { registerSyncPropertiesExtension, type SyncBridge } from '../viewer/SyncPropertiesExtension'
 
 /**
  * Autodesk Platform Services Viewer (v7): AutoCAD's own rendering of the DWG in the browser.
@@ -34,9 +35,11 @@ export type ViewerHandle = {
   fitAll: () => void
 }
 
-export function ApsViewer({ urn, getToken, onSelectHandles, onReady }: {
+export function ApsViewer({ urn, getToken, onSelectHandles, onReady, bridge }: {
   urn: string
   getToken: () => Promise<{ access_token: string; expires_in: number }>
+  /** Property-panel editing (label / type / confirm) bound to the app, as in aps-db-sample. */
+  bridge?: SyncBridge
   /** Called with the AutoCAD handles of whatever the person selects in the viewer. */
   onSelectHandles?: (handles: string[]) => void
   onReady?: (h: ViewerHandle) => void
@@ -62,6 +65,8 @@ export function ApsViewer({ urn, getToken, onSelectHandles, onReady }: {
         if (cancelled || !host.current) return
         const config = { extensions: ['Autodesk.DocumentBrowser'] }
         viewer = new AV.GuiViewer3D(host.current, config)
+        // aps-db-sample: load the property extension once geometry is in, passing our data bridge as options.
+        if (bridge) { registerSyncPropertiesExtension(); viewer.addEventListener(AV.GEOMETRY_LOADED_EVENT, () => viewer.loadExtension('SyncPropertiesExtension', { bridge }), { once: true }) }
         viewer.start()
         viewer.setTheme('light-theme')
         viewerRef.current = viewer

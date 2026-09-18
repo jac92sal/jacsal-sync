@@ -365,6 +365,28 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       ctx.waitUntil(reviewAfterJob(env, { status: 'SUCCESS', kind: 'CONVERT', fileId: file.id }))
       return ok({ file: await getFile(db, file.id), ...r })
     }
+    // Tag an entity detection missed: create a candidate from the stored entity geometry, keyed by handle.
+    if (seg[2] === 'candidates' && method === 'POST') {
+      const b = await readJson<{ handle?: string; kind?: string; humanName?: string }>(request)
+      const handle = (b.handle ?? '').toUpperCase().trim(); const kind = (b.kind ?? 'WALL').toUpperCase()
+      if (!handle) throw badRequest('handle is required.')
+      if (!['WALL', 'BEAM', 'SHEAR_WALL', 'WINDOW', 'DOOR', 'ROOM'].includes(kind)) throw badRequest('kind must be WALL, BEAM, SHEAR_WALL, WINDOW, DOOR or ROOM.')
+      const existing = await one<CandidateRow>(db, `SELECT * FROM candidates WHERE file_id = ? AND json_extract(source_handles,'$[0]') = ?`, file.id, handle)
+      if (existing) return ok({ candidate: hydrateCandidate(existing), created: false })
+      const ent = await one<{ handle: string; layer: string; etype: string; geometry: string }>(db, 'SELECT handle, layer, etype, geometry FROM cad_entities WHERE file_id = ? AND upper(handle) = ?', file.id, handle)
+      if (!ent) throw notFound('That entity is not in the parsed drawing (only model-space lines, polylines, arcs, text, blocks and dimensions are kept).')
+      const k = ({ 1: 1 / 12, 2: 1, 4: 1 / 304.8, 5: 1 / 30.48, 6: 1 / 0.3048 } as Record<number, number>)[Number(file.insunits) || 0] ?? 1 / 12
+      const g = JSON.parse(ent.geometry) as { points: { x: number; y: number }[]; closed?: boolean }
+      const pts = g.points.map((p) => ({ x: p.x * k, y: p.y * k }))
+      let detected: Record<string, unknown>
+      if (kind === 'ROOM') { if (pts.length < 3) throw badRequest('A room needs a closed outline.'); detected = { points: pts } }
+      else if (kind === 'WINDOW' || kind === 'DOOR') detected = { x: pts[0].x, y: pts[0].y, block: ent.etype }
+      else { const a = pts[0], z = pts[pts.length - 1]; if (!a || !z || (a.x === z.x && a.y === z.y)) throw badRequest('A wall needs a line or polyline.'); detected = { x1: a.x, y1: a.y, x2: z.x, y2: z.y, length_ft: Math.round(Math.hypot(z.x - a.x, z.y - a.y) * 1000) / 1000 } }
+      const id = uuid()
+      const name = b.humanName?.trim() || `${kind[0]}${kind.slice(1).toLowerCase()} ${handle}`
+      await insertStmt(db, 'candidates', { id, project_id: file.project_id, file_id: file.id, kind, human_name: name, semantic_tag: null, detected_value: detected, unit: 'ft', confidence: 1, source_handles: [handle], method: `tagged in viewer (${ent.layer})`, ckey: `USER:${handle}`, host_key: null, anchor_rule: kind === 'WALL' ? 'FREE' : null, anchor_params: null, representations: [{ handle, repType: 'GEOMETRY', role: kind === 'ROOM' ? 'room-boundary' : kind === 'WINDOW' || kind === 'DOOR' ? 'opening-block' : 'wall-line' }], backend_target: null }).run()
+      return ok({ candidate: hydrateCandidate((await one<CandidateRow>(db, 'SELECT * FROM candidates WHERE id = ?', id))!), created: true })
+    }
     // Claude review on demand: which pages are the basic floor plans, names, reasons.
     if (seg[2] === 'review' && method === 'POST') {
       const review = await reviewPlans(env, file.id, actor)
