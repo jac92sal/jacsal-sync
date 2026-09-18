@@ -10,7 +10,15 @@
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "upload_source_maps": true,
   "secrets_store_secrets": [
+    // Preferred: an ArcGIS Location Platform API key credential (referrer-restricted; see ARCGIS_REFERER).
+    { "binding": "ARCGIS_API_KEY",       "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "ARCGIS_API_KEY" },
     { "binding": "ARCGIS_CLIENT_ID",     "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "ARCGIS_CLIENT_ID" },
     { "binding": "ARCGIS_CLIENT_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "ARCGIS_CLIENT_SECRET" }
-  ]
+  ],
+  "vars": {
+    // The API key credential only accepts requests whose Referer matches its allow-list. Workers send none by
+    // default, so every ArcGIS location-service call sets this header. Add sync.jacsalservices.com to the key's
+    // referrers in ArcGIS Location Platform and change this to https://sync.jacsalservices.com/ when convenient.
+    "ARCGIS_REFERER": "https://adufeasibility.jacsalservices.com/"
+  }
 }

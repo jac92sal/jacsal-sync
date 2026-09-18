@@ -5,6 +5,7 @@
  * Humans work with named building objects; the engine works with geometry.
  * Static assets never invoke this Worker; only /api/* is forced through it.
  */
+import { connect } from 'cloudflare:sockets'
 import { HttpError, badRequest, fail, forbidden, notFound, readJson, timingSafeEqual, unauthorized, uuid } from './lib/http'
 import { all, insertStmt, one, run, updateStmt } from './lib/db'
 import { confirmCandidate, createObject, getObject, listObjects, patchObject, type CandidateRow } from './lib/objects'
@@ -55,6 +56,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (seg[0] === 'health') return ok({ service: 'jacsal-sync', time: new Date().toISOString() })
   if (seg[0] === 'auth') return authRoutes(request, env, method, seg.slice(1))
   if (seg[0] === 'cad' && seg[1] === 'callback' && seg[2]) return cadCallback(request, env, ctx, seg[2], url)
+  // Temporary: echo selected request headers so service Workers can verify what their HTTP client sends.
+  if (seg[0] === 'debug' && seg[1] === 'echo') {
+    const pick = ['host', 'referer', 'user-agent', 'accept-encoding', 'connection', 'content-type', 'content-length', 'x-forwarded-proto', 'cf-connecting-ip']
+    return ok({ method: request.method, headers: Object.fromEntries(pick.map((k) => [k, request.headers.get(k)])) })
+  }
 
   const user = await currentUser(request, env)
   if (!user) throw unauthorized()
@@ -70,10 +76,34 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
       probe('oss-get', 'https://developer.api.autodesk.com/oss/v2/buckets'),
       probe('aps-root', 'https://developer.api.autodesk.com/'),
       probe('autodesk-www', 'https://www.autodesk.com/'),
-      probe('arcgis', 'https://www.arcgis.com/sharing/rest/info?f=json'),
+      probe('arcgis-www', 'https://www.arcgis.com/sharing/rest/info?f=json'),
+      probe('arcgis-elevation', 'https://elevation-api.arcgis.com/arcgis/rest/info?f=json'),
+      probe('arcgis-static', 'https://static-maps-api.arcgis.com/arcgis/rest/info?f=json'),
+      probe('dcgis', 'https://maps2.dcgis.dc.gov/dcgis/rest/services?f=json'),
+      probe('cloudflare-www', 'https://www.cloudflare.com/'),
+      probe('cf-docs', 'https://developers.cloudflare.com/'),
+      probe('discord', 'https://discord.com/api/v10/gateway'),
+      probe('openai', 'https://api.openai.com/'),
+      probe('npmjs', 'https://registry.npmjs.org/-/ping'),
+      probe('google', 'https://www.google.com/generate_204'),
+      probe('github-api', 'https://api.github.com/'),
+      probe('usgs', 'https://earthquake.usgs.gov/fdsnws/event/1/version'),
     ])
+    const sock = async (host: string, path = '/') => {
+      try {
+        const s = connect({ hostname: host, port: 443 }, { secureTransport: 'on', allowHalfOpen: false })
+        const w = s.writable.getWriter()
+        await w.write(new TextEncoder().encode(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: jacsal-sync/diag\r\nAccept: */*\r\nConnection: close\r\n\r\n`))
+        const r = s.readable.getReader(); let out = ''
+        while (out.length < 600) { const { value, done } = await r.read(); if (done) break; out += new TextDecoder().decode(value) }
+        await s.close().catch(() => undefined)
+        return { host, ok: true, head: out.split('\r\n\r\n')[0].slice(0, 300) }
+      } catch (e) { return { host, ok: false, error: String(e) } }
+    }
+    const sockets = await Promise.all([sock('api.github.com'), sock('elevation-api.arcgis.com', '/arcgis/rest/info?f=json'), sock('developer.api.autodesk.com', '/da/us-east/v3/engines'), sock('maps2.dcgis.dc.gov', '/dcgis/rest/services?f=json')])
     const viaCad = await cad(env).diagnose()
-    return ok({ results, viaCad })
+    const viaGis = await gis(env).diagnose().catch((e) => ({ error: String(e) }))
+    return ok({ results, sockets, viaCad, viaGis })
   }
 
   // ---- calc catalogue (no project needed)

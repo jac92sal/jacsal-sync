@@ -35,7 +35,8 @@ and blocks issue on any mismatch.
 | `AUTH`, `CALC`, `CAD`, `GIS` | Service bindings | see table above |
 | `SYNC_CALLBACK_SECRET` | Secrets Store | store `393ef1d6ad114ec598b1b2abf1e9a2b6` — signs Design Automation onComplete callbacks |
 | `APS_CLIENT_ID`, `APS_CLIENT_SECRET` | Secrets Store (cad) | Autodesk Platform Services app credentials |
-| `BROWSER` | Browser Rendering (cad) | Headless browser parked on the Autodesk origin; Worker subrequests to Autodesk get HTTP 525 |
+| `BROWSER` | Browser Rendering (cad) | Fallback transport (`APS_VIA_BROWSER=true`); default is `shared/socket-http.ts` because Worker fetch() to Autodesk/ArcGIS/DC GIS origins gets a synthetic 525 from the edge |
+| `ARCGIS_API_KEY` | Secrets Store (gis) | Referrer-restricted API key; the Worker sends `ARCGIS_REFERER`. Temporary tokens expire, so rotate with a long-lived key |
 | `APS_RELAY_KEY` / `APS_RELAY_URL` | Secrets Store + var (cad) | Optional external relay instead of Browser Rendering (see `relay/`); unused |
 | `ARCGIS_CLIENT_ID`, `ARCGIS_CLIENT_SECRET` | Secrets Store (gis) | ArcGIS OAuth app credentials (the app item needs Elevation + Basemaps privileges enabled) |
 

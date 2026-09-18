@@ -14,6 +14,7 @@ let cached: { token: string; exp: number } | null = null
 let relay: { url: string; key: string } | null = null
 export function configureRelay(r: { url: string; key: string } | null): void { relay = r }
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { socketFetch } from '../../../shared/socket-http'
 /** A headless-browser page parked on the Autodesk API origin. Calls made with page.evaluate(fetch) are
  *  same-origin browser requests, which reach Autodesk normally (Worker subrequests get HTTP 525). */
 export interface ApsPage { evaluate<T, A>(fn: (arg: A) => Promise<T>, arg: A): Promise<T> }
@@ -29,7 +30,11 @@ export async function apsFetch(url: string, init: RequestInit = {}): Promise<Res
     return fetch(`${relay.url.replace(/\/$/, '')}/api/aps?u=${encodeURIComponent(url)}`, { ...init, headers })
   }
   const page = apsSession.getStore()
-  if (!page) return fetch(url, init)
+  if (!page) {
+    // Default transport: direct TLS socket (Worker fetch() to this host is answered with a synthetic 525).
+    const body = init.body instanceof URLSearchParams || typeof init.body === 'string' ? init.body : init.body instanceof ArrayBuffer ? init.body : undefined
+    return socketFetch(url, { method: init.method, headers: init.headers, body })
+  }
   const headers: Record<string, string> = {}
   new Headers(init.headers ?? {}).forEach((v, k) => { headers[k] = v })
   const body = typeof init.body === 'string' ? init.body : init.body instanceof URLSearchParams ? init.body.toString() : init.body ? new TextDecoder().decode(init.body as ArrayBuffer) : undefined

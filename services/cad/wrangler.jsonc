@@ -22,6 +22,8 @@
     "APS_ALIAS": "prod",
     "APS_REGION": "US",
     // Relay outside Cloudflare for developer.api.autodesk.com (see relay/README.md). Empty = direct.
-    "APS_RELAY_URL": ""
+    "APS_RELAY_URL": "",
+    // "true" = make Autodesk API calls from a Browser Rendering session instead of the default TLS-socket HTTP client.
+    "APS_VIA_BROWSER": "false"
   }
 }

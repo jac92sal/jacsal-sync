@@ -30,13 +30,19 @@
   push from the archive, or tell Claude to push once it exists.
 - **Rotate the three credentials that were uploaded in plain text** (Anthropic key, Autodesk client secret, ArcGIS client secret).
   Autodesk + ArcGIS values are now in the Secrets Store (`APS_*`, `ARCGIS_*`); the Anthropic key was **not** stored anywhere.
-- **ArcGIS credentials have no privileges**: tokens are issued but every location service rejects them. In ArcGIS Location Platform,
-  open the *aduprojectjacsal* item → Privileges → enable Elevation and Basemaps (static maps), or create an API-key credential.
+- **ArcGIS works, with two rules.** The API key credential is referrer-restricted, so the GIS Worker sends
+  `Referer: https://adufeasibility.jacsalservices.com/` (var `ARCGIS_REFERER`). Add `https://sync.jacsalservices.com` to the
+  key's Referrers and switch the var when convenient. The stored `ARCGIS_API_KEY` is a **temporary token**: when it expires,
+  elevation/static maps return `498 Token Invalid`. Generate a long-lived API key (expiration up to 1 year) from the same
+  credential item and update `ARCGIS_API_KEY` in the Secrets Store; no redeploy needed.
 - **Cloudflare returned a 403 "Attention Required" page for the SPA document to the build sandbox's IP** (assets and /api/* were fine).
   That is a zone WAF/bot rule, not the Worker. If your browser sees it too, check Security → WAF / Bot Fight Mode for jacsalservices.com.
-- **Autodesk reachability.** Cloudflare Workers cannot call `developer.api.autodesk.com` directly (Autodesk's own Cloudflare edge
-  answers HTTP 525 to Worker subrequests). The CAD service therefore opens a Browser Rendering session parked on the Autodesk
-  origin and makes the API calls from inside it (`BROWSER` binding). Verified live: token, nickname, engines, bucket upload,
+- **Outbound HTTP quirk (root cause found).** From this account, Worker `fetch()` to several ordinary origins
+  (developer.api.autodesk.com, elevation-api.arcgis.com, static-maps-api.arcgis.com, maps2.dcgis.dc.gov, even api.github.com)
+  is answered by the edge with a synthetic `error code: 525`, while CDN-fronted hosts work. A direct TLS socket to the same
+  hosts works, so both service Workers use `shared/socket-http.ts`, a small HTTP/1.1 client over `cloudflare:sockets`, for
+  those hosts. Browser Rendering remains available as a fallback (`APS_VIA_BROWSER=true`). Worth a Cloudflare support ticket:
+  the zone's SSL settings are ordinary (full, no origin pulls, no origin rules). Verified live: token, nickname, engines, bucket upload,
   activity `RunScript+prod` creation, work item submission, report retrieval. A test file renamed `.dwg` reached AutoCAD Core
   Console and failed with ErrorStatus 434 (invalid DWG) as expected. **Upload a real DWG in the morning** to confirm DXFOUT and
   write-back end to end; each job stores its Autodesk report URL and the last log lines in `error`.

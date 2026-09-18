@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import { socketFetch } from '../../../shared/socket-http'
 
 /**
  * GisService — shared GIS capability over a Service Binding.
@@ -26,21 +27,40 @@ type ArcgisError = { error?: { code: number; message: string; details?: string[]
 let cachedToken: { value: string; expiresAt: number } | null = null
 
 export class GisService extends WorkerEntrypoint<Env> {
+  /** Location services: API key when present (referrer-restricted, so every call sends ARCGIS_REFERER), else an OAuth app token. */
   private async token(): Promise<string> {
+    const apiKey = await this.env.ARCGIS_API_KEY.get().catch(() => '')
+    if (apiKey) return apiKey
     if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value
     const [id, secret] = await Promise.all([this.env.ARCGIS_CLIENT_ID.get(), this.env.ARCGIS_CLIENT_SECRET.get()])
     const body = new URLSearchParams({ client_id: id, client_secret: secret, grant_type: 'client_credentials', expiration: '120', f: 'json' })
-    const r = await fetch(ARCGIS_TOKEN_URL, { method: 'POST', body })
+    const r = await socketFetch(ARCGIS_TOKEN_URL, { method: 'POST', body })
     const j = (await r.json()) as { access_token?: string; expires_in?: number } & ArcgisError
     if (!j.access_token) throw new Error(`arcgis token: ${j.error?.message ?? r.status}`)
     cachedToken = { value: j.access_token, expiresAt: Date.now() + (j.expires_in ?? 7200) * 1000 }
     return j.access_token
   }
 
+  /** fetch() for ArcGIS location services with the referrer the API key credential allows. */
+  private esri(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers ?? {})
+    if (this.env.ARCGIS_REFERER) headers.set('Referer', this.env.ARCGIS_REFERER)
+    // Worker fetch() to these origins is answered with a synthetic 525 from the edge; a direct TLS socket works.
+    return socketFetch(url, { method: init.method, headers, body: init.body as string | undefined })
+  }
+
+  /** Diagnostic: credential shape and a live elevation call (never returns the key itself). */
+  async diagnose(): Promise<Record<string, unknown>> {
+    const apiKey = await this.env.ARCGIS_API_KEY.get().catch((e: unknown) => `ERR:${String(e)}`)
+    const key = apiKey.startsWith('ERR:') ? '' : apiKey
+    const r = await this.esri(`${ELEVATION}/at-point?lon=-77.0736&lat=38.9315&f=json&token=${key}`)
+    return { keyLength: key.length, keyHead: key.slice(0, 4), referer: this.env.ARCGIS_REFERER, status: r.status, body: (await r.text()).slice(0, 160), apiKeyBindingError: apiKey.startsWith('ERR:') ? apiKey : null }
+  }
+
   /** Elevation in metres (mean sea level) for one lon/lat. */
   async elevationAt(lon: number, lat: number, relativeTo: 'meanSeaLevel' | 'ellipsoid' = 'meanSeaLevel'): Promise<number> {
     const u = `${ELEVATION}/at-point?lon=${lon}&lat=${lat}&relativeTo=${relativeTo}&f=json&token=${await this.token()}`
-    const j = (await (await fetch(u)).json()) as { result?: { point: ElevationPoint } } & ArcgisError
+    const j = (await (await this.esri(u)).json()) as { result?: { point: ElevationPoint } } & ArcgisError
     if (j.error) throw new Error(`elevation ${j.error.code}: ${j.error.message}`)
     return j.result!.point.z
   }
@@ -50,7 +70,7 @@ export class GisService extends WorkerEntrypoint<Env> {
     const out: ElevationPoint[] = []
     const token = await this.token()
     for (let i = 0; i < coords.length; i += 100) {
-      const r = await fetch(`${ELEVATION}/at-many-points?token=${token}`, {
+      const r = await this.esri(`${ELEVATION}/at-many-points?token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ coordinates: coords.slice(i, i + 100), relativeTo, f: 'json' }),
@@ -84,7 +104,7 @@ export class GisService extends WorkerEntrypoint<Env> {
   /** Static map PNG bytes. Attribution is burned in unless opts.attribution = 'none'. */
   async staticMap(style: StaticMapStyle, endpoint: 'with-point' | 'with-many-points' | 'with-polyline' | 'with-polygon', params: Record<string, string | number>): Promise<{ bytes: ArrayBuffer; contentType: string }> {
     const q = new URLSearchParams({ format: 'png', ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])), token: await this.token() })
-    const r = await fetch(`${STATIC_MAPS}/${style}/${endpoint}?${q}`)
+    const r = await this.esri(`${STATIC_MAPS}/${style}/${endpoint}?${q}`)
     const contentType = r.headers.get('content-type') ?? ''
     if (!contentType.startsWith('image/')) throw new Error(`static map ${r.status}: ${await r.text()}`)
     return { bytes: await r.arrayBuffer(), contentType }
@@ -93,7 +113,7 @@ export class GisService extends WorkerEntrypoint<Env> {
   /** Generic ArcGIS layer point query (public layers). */
   async queryLayerAtPoint(layerUrl: string, lon: number, lat: number, outFields = '*', returnGeometry = false): Promise<ArcgisFeature[]> {
     const body = new URLSearchParams({ geometry: `${lon},${lat}`, geometryType: 'esriGeometryPoint', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields, returnGeometry: String(returnGeometry), outSR: '4326', f: 'json' })
-    const j = (await (await fetch(`${layerUrl}/query`, { method: 'POST', body })).json()) as { features?: ArcgisFeature[] } & ArcgisError
+    const j = (await (await socketFetch(`${layerUrl}/query`, { method: 'POST', body })).json()) as { features?: ArcgisFeature[] } & ArcgisError
     if (j.error) throw new Error(`arcgis query ${j.error.code}: ${j.error.message}`)
     return j.features ?? []
   }

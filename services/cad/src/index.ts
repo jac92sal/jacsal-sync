@@ -13,7 +13,7 @@ export type { WorkItemStatus } from './aps'
 export class CadService extends WorkerEntrypoint<Env> {
   /** Run fn with a headless browser parked on the Autodesk API origin (see apsFetch). Falls back to direct fetch if the binding is unavailable. */
   private async withAps<T>(fn: () => Promise<T>): Promise<T> {
-    if (aps.apsSession.getStore() || !this.env.BROWSER || this.env.APS_RELAY_URL) return fn()
+    if (aps.apsSession.getStore() || !this.env.BROWSER || this.env.APS_RELAY_URL || String(this.env.APS_VIA_BROWSER) !== 'true') return fn()
     const browser = await puppeteer.launch(this.env.BROWSER)
     try {
       const page = await browser.newPage()
@@ -71,7 +71,7 @@ export class CadService extends WorkerEntrypoint<Env> {
 
   /** Connectivity + credentials diagnostic: token, nickname, engines. */
   async diagnose(): Promise<{ ok: boolean; nickname?: string; engines?: string[]; error?: string; via: string }> {
-    const via = this.env.APS_RELAY_URL ? 'relay' : this.env.BROWSER ? 'browser' : 'direct'
+    const via = this.env.APS_RELAY_URL ? 'relay' : String(this.env.APS_VIA_BROWSER) === 'true' && this.env.BROWSER ? 'browser' : 'socket'
     try {
       return await this.withAps(async () => {
         const token = await aps.apsToken(await this.creds())
