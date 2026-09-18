@@ -1,5 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { socketFetch } from '../../../shared/socket-http'
+import { open, seal } from '../../../shared/secretbox'
+import { ArcgisPortalError, createArcgisApiKey } from './apikey'
 
 /**
  * GisService — shared GIS capability over a Service Binding.
@@ -25,10 +27,110 @@ type ArcgisError = { error?: { code: number; message: string; details?: string[]
 // Token cache is not request-scoped state: it is a process-wide credential cache
 // keyed by nothing but time, so sharing it across requests is the intent.
 let cachedToken: { value: string; expiresAt: number } | null = null
+// Same for the app-created key: one D1 read + AES-GCM open per minute per isolate, not per call.
+let storedKeyCache: { value: string | null; at: number } | null = null
+
+const KEY_ROW = 'arcgis_api_key'
+const META_ROW = 'arcgis_api_key_meta'
+
+export type ArcgisKeyMeta = { itemId: string; itemUrl: string; username: string; expiresAt: string; privileges: string[]; referrers: string[]; createdAt: string; createdBy: string }
+export type ArcgisKeyStatus = { source: 'app' | 'secrets-store' | 'oauth' | 'none'; meta: ArcgisKeyMeta | null; referer: string; daysLeft: number | null }
+export type CreateKeyRequest = { username: string; password: string; expiresDays: number; privileges: string[]; referrers: string[]; title?: string }
+
+/** Privileges offered in Settings → ArcGIS. Identifiers are the portal's; unknown ones are rejected by registerApp. */
+export const ARCGIS_PRIVILEGES: { id: string; label: string; default: boolean }[] = [
+  { id: 'premium:user:basemaps', label: 'Basemaps (map tiles, static basemap tiles)', default: true },
+  { id: 'premium:user:elevation', label: 'Elevation (site elevation, slope)', default: true },
+  { id: 'premium:user:staticMaps', label: 'Static maps (PNG site maps)', default: true },
+  { id: 'premium:user:geocode:temporary', label: 'Geocoding, temporary (address → point)', default: false },
+  { id: 'premium:user:places', label: 'Places (nearby POIs)', default: false },
+  { id: 'premium:user:networkanalysis:routing', label: 'Routing', default: false },
+]
 
 export class GisService extends WorkerEntrypoint<Env> {
-  /** Location services: API key when present (referrer-restricted, so every call sends ARCGIS_REFERER), else an OAuth app token. */
+  private get referer(): string { return this.env.ARCGIS_REFERER }
+  private get refererOrigin(): string { return new URL(this.referer).origin }
+
+  /** The key created from Settings → ArcGIS, if any (sealed in D1 under APP_KEK). */
+  private async storedKey(): Promise<string | null> {
+    if (storedKeyCache && Date.now() - storedKeyCache.at < 60_000) return storedKeyCache.value
+    const row = await this.env.DB.prepare('SELECT value FROM app_settings WHERE key = ? AND sealed = 1').bind(KEY_ROW).first<{ value: string }>().catch(() => null)
+    let value: string | null = null
+    if (row?.value) {
+      const kek = await this.env.APP_KEK.get()
+      value = await open(kek, row.value)
+    }
+    storedKeyCache = { value, at: Date.now() }
+    return value
+  }
+
+  private async storedMeta(): Promise<ArcgisKeyMeta | null> {
+    const row = await this.env.DB.prepare('SELECT value FROM app_settings WHERE key = ?').bind(META_ROW).first<{ value: string }>().catch(() => null)
+    return row?.value ? (JSON.parse(row.value) as ArcgisKeyMeta) : null
+  }
+
+  /** What the location-service calls will authenticate with right now. */
+  async keyStatus(): Promise<ArcgisKeyStatus> {
+    const meta = await this.storedMeta()
+    const stored = await this.storedKey().catch(() => null)
+    let source: ArcgisKeyStatus['source'] = 'none'
+    if (stored) source = 'app'
+    else if (await this.env.ARCGIS_API_KEY.get().catch(() => '')) source = 'secrets-store'
+    else if (await this.env.ARCGIS_CLIENT_ID.get().catch(() => '')) source = 'oauth'
+    const daysLeft = source === 'app' && meta ? Math.floor((Date.parse(meta.expiresAt) - Date.now()) / 86_400_000) : null
+    return { source, meta: source === 'app' ? meta : null, referer: this.referer, daysLeft }
+  }
+
+  /**
+   * Create a long-lived API key credential with the user's ArcGIS sign-in, then seal and store the key.
+   * The password is used for one generateToken call and is never persisted or logged.
+   */
+  async createApiKey(req: CreateKeyRequest, actor: string): Promise<ArcgisKeyMeta> {
+    const username = req.username.trim()
+    if (!username || !req.password) throw new Error('ArcGIS username and password are required.')
+    const privileges = [...new Set(req.privileges.filter((p) => ARCGIS_PRIVILEGES.some((k) => k.id === p)))]
+    if (privileges.length === 0) throw new Error('Select at least one privilege.')
+    const referrers = [...new Set([this.refererOrigin, ...req.referrers.map((r) => r.trim()).filter(Boolean)])]
+    let created
+    try {
+      created = await createArcgisApiKey({ username, password: req.password, title: req.title, referrers, privileges, expiresDays: req.expiresDays, referer: this.refererOrigin })
+    } catch (e) {
+      if (e instanceof ArcgisPortalError) throw new Error(`ArcGIS (${e.step}): ${e.message}`)
+      throw e
+    }
+    const kek = await this.env.APP_KEK.get()
+    const sealed = await seal(kek, created.accessToken)
+    const meta: ArcgisKeyMeta = { itemId: created.itemId, itemUrl: created.itemUrl, username: created.username, expiresAt: created.expiresAt, privileges: created.privileges, referrers: created.referrers, createdAt: new Date().toISOString(), createdBy: actor }
+    const upsert = 'INSERT INTO app_settings (key, value, sealed, updated_by, updated_at) VALUES (?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, sealed = excluded.sealed, updated_by = excluded.updated_by, updated_at = excluded.updated_at'
+    await this.env.DB.batch([
+      this.env.DB.prepare(upsert).bind(KEY_ROW, sealed, 1, actor),
+      this.env.DB.prepare(upsert).bind(META_ROW, JSON.stringify(meta), 0, actor),
+    ])
+    storedKeyCache = null
+    return meta
+  }
+
+  /** Forget the app-created key (falls back to the Secrets Store key or OAuth). The ArcGIS item is left for you to delete in the portal. */
+  async clearStoredKey(): Promise<void> {
+    await this.env.DB.prepare('DELETE FROM app_settings WHERE key IN (?, ?)').bind(KEY_ROW, META_ROW).run()
+    storedKeyCache = null
+  }
+
+  /** One real elevation call with whatever key is active. */
+  async testKey(): Promise<{ ok: true; elevationM: number; source: ArcgisKeyStatus['source'] } | { ok: false; error: string; source: ArcgisKeyStatus['source'] }> {
+    const { source } = await this.keyStatus()
+    try {
+      const z = await this.elevationAt(-77.0369, 38.9072)
+      return { ok: true, elevationM: z, source }
+    } catch (e) {
+      return { ok: false, error: String((e as Error).message ?? e), source }
+    }
+  }
+
+  /** Location services: app-created key, else the Secrets Store key, else an OAuth app token. Every call sends ARCGIS_REFERER. */
   private async token(): Promise<string> {
+    const stored = await this.storedKey().catch(() => null)
+    if (stored) return stored
     const apiKey = await this.env.ARCGIS_API_KEY.get().catch(() => '')
     if (apiKey) return apiKey
     if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value
@@ -51,10 +153,10 @@ export class GisService extends WorkerEntrypoint<Env> {
 
   /** Diagnostic: credential shape and a live elevation call (never returns the key itself). */
   async diagnose(): Promise<Record<string, unknown>> {
-    const apiKey = await this.env.ARCGIS_API_KEY.get().catch((e: unknown) => `ERR:${String(e)}`)
-    const key = apiKey.startsWith('ERR:') ? '' : apiKey
+    const status = await this.keyStatus()
+    const key = await this.token().catch(() => '')
     const r = await this.esri(`${ELEVATION}/at-point?lon=-77.0736&lat=38.9315&f=json&token=${key}`)
-    return { keyLength: key.length, keyHead: key.slice(0, 4), referer: this.env.ARCGIS_REFERER, status: r.status, body: (await r.text()).slice(0, 160), apiKeyBindingError: apiKey.startsWith('ERR:') ? apiKey : null }
+    return { source: status.source, keyLength: key.length, keyHead: key.slice(0, 4), referer: this.env.ARCGIS_REFERER, status: r.status, body: (await r.text()).slice(0, 160) }
   }
 
   /** Elevation in metres (mean sea level) for one lon/lat. */

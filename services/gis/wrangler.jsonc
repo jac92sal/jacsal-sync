@@ -9,8 +9,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "upload_source_maps": true,
+  // Shared app database: app_settings holds the API key created from Settings → ArcGIS (sealed under APP_KEK).
+  "d1_databases": [{ "binding": "DB", "database_name": "jacsal-sync-db", "database_id": "97ed047b-673f-49dd-bae3-0dcf9086cba4" }],
   "secrets_store_secrets": [
-    // Preferred: an ArcGIS Location Platform API key credential (referrer-restricted; see ARCGIS_REFERER).
+    // Master key for sealed values in app_settings (shared/secretbox.ts).
+    { "binding": "APP_KEK",              "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "APP_KEK" },
+    // Fallback when no key has been created from the app: a key pasted into the Secrets Store.
     { "binding": "ARCGIS_API_KEY",       "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "ARCGIS_API_KEY" },
     { "binding": "ARCGIS_CLIENT_ID",     "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "ARCGIS_CLIENT_ID" },
     { "binding": "ARCGIS_CLIENT_SECRET", "store_id": "393ef1d6ad114ec598b1b2abf1e9a2b6", "secret_name": "ARCGIS_CLIENT_SECRET" }

@@ -9,6 +9,7 @@ import ObjectModel from './pages/ObjectModel'
 import ChangeImpact from './pages/ChangeImpact'
 import Calcs from './pages/Calcs'
 import IssueGate from './pages/IssueGate'
+import Settings from './pages/Settings'
 
 export default function App() {
   const { user, loading } = useSession()
@@ -17,6 +18,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Projects />} />
+      <Route path="/settings" element={<Settings />} />
       <Route path="/p/:id" element={<ProjectShell />}>
         <Route index element={<Dashboard />} />
         <Route path="cad" element={<CadConfirm />} />

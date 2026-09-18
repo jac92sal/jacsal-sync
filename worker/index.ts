@@ -15,7 +15,7 @@ import { issueGate } from './lib/gate'
 import { getFile, pendingJobs, processJob, uploadFile, writeBack } from './lib/cad'
 import type { CalcService } from '../services/calc/src/index'
 import type { CadService } from '../services/cad/src/index'
-import type { GisService } from '../services/gis/src/index'
+import { ARCGIS_PRIVILEGES, type GisService } from '../services/gis/src/index'
 
 const SESSION_COOKIE = 'jacsal_session'
 interface AuthUser { id: string; email: string; name: string | null; emailVerified: boolean }
@@ -110,6 +110,28 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   if (seg[0] === 'calc' && seg[1] === 'modules') return ok({ modules: await calc(env).list() })
   if (seg[0] === 'calc' && seg[1] === 'benchmarks') return ok({ benchmarks: await calc(env).benchmarks() })
   if (seg[0] === 'calc' && seg[1] === 'runs' && seg[2]) { const r = await getCalcRun(db, seg[2]); if (!r) throw notFound(); return ok({ run: r }) }
+
+  // ---- settings → ArcGIS API key (created from the user's ArcGIS sign-in; password is used in-request only)
+  if (seg[0] === 'settings' && seg[1] === 'arcgis') {
+    if (!seg[2] && method === 'GET') return ok({ status: await gis(env).keyStatus(), privileges: ARCGIS_PRIVILEGES })
+    if (seg[2] === 'test' && method === 'POST') return ok({ test: await gis(env).testKey() })
+    if (seg[2] === 'key' && method === 'POST') {
+      const b = await readJson<{ username?: string; password?: string; expiresDays?: number; privileges?: string[]; referrers?: string[]; title?: string }>(request)
+      if (!b.username?.trim() || !b.password) throw badRequest('ArcGIS username and password are required.')
+      const expiresDays = Math.min(365, Math.max(1, Number(b.expiresDays) || 365))
+      const privileges = Array.isArray(b.privileges) ? b.privileges : ARCGIS_PRIVILEGES.filter((p) => p.default).map((p) => p.id)
+      const referrers = Array.isArray(b.referrers) ? b.referrers : []
+      const meta = await gis(env).createApiKey({ username: b.username, password: b.password, expiresDays, privileges, referrers, title: b.title }, actor)
+      await insertStmt(db, 'audit_log', { id: uuid(), project_id: null, actor, action: 'settings.arcgis_key.created', target_kind: 'SETTING', target_id: meta.itemId, detail: { expiresAt: meta.expiresAt, privileges: meta.privileges, referrers: meta.referrers, arcgisUser: meta.username } }).run()
+      return ok({ meta, test: await gis(env).testKey() })
+    }
+    if (seg[2] === 'key' && method === 'DELETE') {
+      await gis(env).clearStoredKey()
+      await insertStmt(db, 'audit_log', { id: uuid(), project_id: null, actor, action: 'settings.arcgis_key.cleared', target_kind: 'SETTING', target_id: 'arcgis_api_key', detail: null }).run()
+      return ok({ status: await gis(env).keyStatus() })
+    }
+    throw notFound()
+  }
 
   // ---- projects
   if (seg[0] === 'projects' && !seg[1]) {

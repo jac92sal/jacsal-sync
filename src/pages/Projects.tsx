@@ -12,7 +12,7 @@ export default function Projects() {
   const create = async () => { setErr(''); try { await api.post('/projects', { name, address, code_path: 'CBC', risk_category: 'II', design_method: 'ASD' }); setName(''); setAddress(''); await load() } catch (e) { setErr((e as Error).message) } }
   return (
     <div className="h-full flex flex-col">
-      <header className="bg-side text-white px-5 py-3 flex items-center justify-between"><div><span className="font-bold tracking-wider">ENGINEERING SYNC</span><span className="text-xs text-gray-400 ml-3">JacSal Services</span></div><div className="text-xs text-gray-300">{user?.email} · <button className="underline" onClick={logout}>Sign out</button></div></header>
+      <header className="bg-side text-white px-5 py-3 flex items-center justify-between"><div><span className="font-bold tracking-wider">ENGINEERING SYNC</span><span className="text-xs text-gray-400 ml-3">JacSal Services</span></div><div className="text-xs text-gray-300"><Link className="underline mr-3" to="/settings">Settings</Link>{user?.email} · <button className="underline" onClick={logout}>Sign out</button></div></header>
       <main className="p-6 grid gap-6 md:grid-cols-[2fr_1fr] max-w-6xl w-full mx-auto">
         <Card title="Projects">
           {projects.length === 0 ? <div className="p-6 text-sm text-muted">No projects yet. Create one on the right, then upload a DWG or DXF.</div> :

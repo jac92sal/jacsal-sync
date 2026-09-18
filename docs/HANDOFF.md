@@ -29,11 +29,12 @@
 - **GitHub repo:** `jac92sal/jacsal-sync` (`main`). All work is pushed there.
 - **Rotate the three credentials that were uploaded in plain text** (Anthropic key, Autodesk client secret, ArcGIS client secret).
   Autodesk + ArcGIS values are now in the Secrets Store (`APS_*`, `ARCGIS_*`); the Anthropic key was **not** stored anywhere.
-- **ArcGIS: key expired.** The API key credential is referrer-restricted, so the GIS Worker sends
-  `Referer: https://sync.jacsalservices.com/` (var `ARCGIS_REFERER`; that host is on the key's Referrers). The stored
-  `ARCGIS_API_KEY` was a **temporary token** and has expired (elevation returns `498 Token Invalid`; DC soil/zoning/parcel
-  still work because those layers are public). Generate a long-lived API key (expiration up to 1 year, privileges
-  Basemaps + Elevation) from the same credential item and update `ARCGIS_API_KEY` in the Secrets Store; no redeploy needed.
+- **ArcGIS key: create it from the app.** Open **Settings** (top-right on the Projects page) → *Create a long-lived API key*.
+  Enter your ArcGIS username + password, keep the default privileges (Basemaps, Elevation, Static maps), 1 year, and click
+  Create. The Worker signs in once, creates an API key credential item in your ArcGIS content with referrers
+  `https://sync.jacsalservices.com` (+ adufeasibility), seals the key under `APP_KEK` into `app_settings`, discards the
+  password, and runs a test elevation call. The old `ARCGIS_API_KEY` Secrets Store entry is now only a fallback (the last
+  temporary token in it has expired). If ArcGIS rejects a privilege, the error names it: untick it and retry.
 - **Cloudflare returned a 403 "Attention Required" page for the SPA document to the build sandbox's IP** (assets and /api/* were fine).
   That is a zone WAF/bot rule, not the Worker. If your browser sees it too, check Security → WAF / Bot Fight Mode for jacsalservices.com.
 - **Outbound HTTP quirk (root cause found).** From this account, Worker `fetch()` to several ordinary origins

@@ -17,24 +17,27 @@
     "deploy": "npm run deploy:services && vite build && wrangler deploy"
   },
   "dependencies": {
+    "lucide-react": "^0.544.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.9.1",
-    "lucide-react": "^0.544.0"
+    "react-router-dom": "^7.9.1"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.55.0",
+    "@esri/arcgis-rest-developer-credentials": "^4.11.0",
+    "@esri/arcgis-rest-portal": "^4.11.0",
+    "@esri/arcgis-rest-request": "^4.11.0",
+    "@tailwindcss/vite": "^4.1.13",
     "@types/node": "^24.13.5",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
+    "tailwindcss": "^4.1.13",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
-    "wrangler": "^4.134.0",
-    "tailwindcss": "^4.1.13",
-    "@tailwindcss/vite": "^4.1.13",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wrangler": "^4.134.0"
   },
   "workspaces": [
     "services/*"

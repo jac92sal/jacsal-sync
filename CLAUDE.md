@@ -36,7 +36,8 @@ and blocks issue on any mismatch.
 | `SYNC_CALLBACK_SECRET` | Secrets Store | store `393ef1d6ad114ec598b1b2abf1e9a2b6` — signs Design Automation onComplete callbacks |
 | `APS_CLIENT_ID`, `APS_CLIENT_SECRET` | Secrets Store (cad) | Autodesk Platform Services app credentials |
 | `BROWSER` | Browser Rendering (cad) | Fallback transport (`APS_VIA_BROWSER=true`); default is `shared/socket-http.ts` because Worker fetch() to Autodesk/ArcGIS/DC GIS origins gets a synthetic 525 from the edge |
-| `ARCGIS_API_KEY` | Secrets Store (gis) | Referrer-restricted API key; the Worker sends `ARCGIS_REFERER`. Temporary tokens expire, so rotate with a long-lived key |
+| `APP_KEK` | Secrets Store (gis) | Master key for sealed values in `app_settings` (`shared/secretbox.ts`, HKDF → AES-GCM) |
+| `ARCGIS_API_KEY` | Secrets Store (gis) | **Fallback only.** The live key is created from Settings → ArcGIS (`services/gis/src/apikey.ts`) and stored sealed in `app_settings`; the Worker sends `ARCGIS_REFERER` on every call |
 | `APS_RELAY_KEY` / `APS_RELAY_URL` | Secrets Store + var (cad) | Optional external relay instead of Browser Rendering (see `relay/`); unused |
 | `ARCGIS_CLIENT_ID`, `ARCGIS_CLIENT_SECRET` | Secrets Store (gis) | ArcGIS OAuth app credentials (the app item needs Elevation + Basemaps privileges enabled) |
 
